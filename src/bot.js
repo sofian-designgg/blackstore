@@ -28,6 +28,7 @@ const CONFIG = {
   pingRoleId: '1482108909429981265',
   avisChannelId: '1482065735726403829', // ancien ID (optionnel)
   avisChannelName: '🍂・proof', // nom du salon d'avis
+  statsCategoryId: '1483556393519943913',
   shopPriceEuros: 3,
   shopNamePrefix: '💸・',
   maxPingsPerWindow: 3,
@@ -159,7 +160,7 @@ async function ensureStatsChannels(guild) {
   const guildId = guild.id;
   let cfg = await GuildConfig.findOne({ guildId });
 
-  const category = guild.channels.cache.get(CONFIG.shopCategoryId);
+  const category = guild.channels.cache.get(CONFIG.statsCategoryId);
   if (!category || category.type !== ChannelType.GuildCategory) return null;
 
   const everyoneRole = guild.roles.everyone;
@@ -193,14 +194,14 @@ async function ensureStatsChannels(guild) {
 
   const totalMembersChannel = await getOrCreateVoice(
     'statsTotalMembersChannelId',
-    '👥・Total: 0'
+    '🖤・Total: 0'
   );
   const onlineMembersChannel = await getOrCreateVoice(
     'statsOnlineMembersChannelId',
-    '🟢・En ligne: 0'
+    '🖤・En ligne: 0'
   );
-  const proofChannel = await getOrCreateVoice('statsProofChannelId', '📁・Proofs: 0');
-  const storeChannel = await getOrCreateVoice('statsStoreChannelId', '🏪・Stores: 0');
+  const proofChannel = await getOrCreateVoice('statsProofChannelId', '🖤・Proofs: 0');
+  const storeChannel = await getOrCreateVoice('statsStoreChannelId', '🖤・Stores: 0');
 
   return {
     totalMembersChannel,
@@ -216,7 +217,7 @@ async function updateGuildStats(guild) {
     const cfg = await GuildConfig.findOne({ guildId });
     if (!cfg) return;
 
-    const category = guild.channels.cache.get(CONFIG.shopCategoryId);
+    const category = guild.channels.cache.get(CONFIG.statsCategoryId);
     if (!category || category.type !== ChannelType.GuildCategory) return;
 
     const totalMembersChannel = cfg.statsTotalMembersChannelId
@@ -247,16 +248,16 @@ async function updateGuildStats(guild) {
     const totalStores = await Shop.countDocuments({ guildId });
 
     if (totalMembersChannel) {
-      await totalMembersChannel.setName(`👥・Total: ${totalMembers}`).catch(() => {});
+      await totalMembersChannel.setName(`🖤・Total: ${totalMembers}`).catch(() => {});
     }
     if (onlineMembersChannel) {
-      await onlineMembersChannel.setName(`🟢・En ligne: ${onlineMembers}`).catch(() => {});
+      await onlineMembersChannel.setName(`🖤・En ligne: ${onlineMembers}`).catch(() => {});
     }
     if (proofChannel) {
-      await proofChannel.setName(`📁・Proofs: ${totalProofs}`).catch(() => {});
+      await proofChannel.setName(`🖤・Proofs: ${totalProofs}`).catch(() => {});
     }
     if (storeChannel) {
-      await storeChannel.setName(`🏪・Stores: ${totalStores}`).catch(() => {});
+      await storeChannel.setName(`🖤・Stores: ${totalStores}`).catch(() => {});
     }
   } catch (err) {
     console.error(`Erreur updateGuildStats pour ${guild.id}`, err);
@@ -330,6 +331,13 @@ async function createShop(message, targetMember) {
   });
 
   await message.reply(`✅ Shop créé pour ${targetMember} dans ${channel}.`);
+
+  // Met à jour les stats de stores immédiatement
+  try {
+    await updateGuildStats(guild);
+  } catch (err) {
+    console.error('Erreur update stats après création shop', err);
+  }
 }
 
 async function checkShopRents() {
@@ -608,6 +616,9 @@ async function handleAvisCommand(message) {
       buyerId: message.author.id,
       note
     });
+
+    // Met à jour les stats de proofs immédiatement
+    await updateGuildStats(guild);
   } catch (err) {
     console.error('Erreur enregistrement avis', err);
   }
