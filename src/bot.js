@@ -25,7 +25,8 @@ const client = new Client({
 const CONFIG = {
   shopCategoryId: '1482068032070090812',
   pingRoleId: '1482108909429981265',
-  avisChannelId: '1482065735726403829',
+  avisChannelId: '1482065735726403829', // ancien ID (optionnel)
+  avisChannelName: '🍂・proof', // nom du salon d'avis
   shopPriceEuros: 3,
   shopNamePrefix: '💸・',
   maxPingsPerWindow: 3,
@@ -330,8 +331,12 @@ async function handlePotentialLink(message) {
 // ---------- SYSTÈME D\'AVIS ----------
 
 async function handleAvisCommand(message) {
-  if (message.channel.id !== CONFIG.avisChannelId) {
-    await message.reply('❌ Tu dois utiliser cette commande dans le salon d\'avis dédié.');
+  const isRightChannel =
+    message.channel.id === CONFIG.avisChannelId ||
+    message.channel.name === CONFIG.avisChannelName;
+
+  if (!isRightChannel) {
+    await message.reply('❌ Tu dois utiliser cette commande dans le salon d\'avis dédié (`#🍂・proof`).');
     return;
   }
 
