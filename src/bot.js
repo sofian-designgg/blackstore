@@ -74,6 +74,14 @@ const warnSchema = new mongoose.Schema({
 const Shop = mongoose.model('Shop', shopSchema);
 const Warn = mongoose.model('Warn', warnSchema);
 
+// Config par serveur (ex: salon d'avis)
+const guildConfigSchema = new mongoose.Schema({
+  guildId: { type: String, unique: true, index: true },
+  avisChannelId: { type: String, default: null }
+});
+
+const GuildConfig = mongoose.model('GuildConfig', guildConfigSchema);
+
 // ---------- UTILITAIRES TEMPS ----------
 
 function nowIso() {
@@ -331,8 +339,13 @@ async function handlePotentialLink(message) {
 // ---------- SYSTÈME D\'AVIS ----------
 
 async function handleAvisCommand(message) {
+  const guildId = message.guild.id;
+  const guildCfg = await GuildConfig.findOne({ guildId }).catch(() => null);
+
+  const configuredAvisId = guildCfg?.avisChannelId || CONFIG.avisChannelId;
+
   const isRightChannel =
-    message.channel.id === CONFIG.avisChannelId ||
+    message.channel.id === configuredAvisId ||
     message.channel.name === CONFIG.avisChannelName;
 
   if (!isRightChannel) {
@@ -476,6 +489,24 @@ client.on('messageCreate', async (message) => {
       }
 
       await createShop(message, targetUser);
+      return;
+    }
+
+    if (content === '!setavis') {
+      const member = message.member;
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await message.reply('❌ Seuls les administrateurs peuvent configurer le salon d\'avis.');
+        return;
+      }
+
+      const guildId = message.guild.id;
+      await GuildConfig.findOneAndUpdate(
+        { guildId },
+        { avisChannelId: message.channel.id },
+        { upsert: true, new: true }
+      );
+
+      await message.reply('✅ Ce salon est maintenant configuré comme **salon d\'avis** pour la commande `+pr`.');
       return;
     }
 
