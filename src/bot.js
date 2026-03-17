@@ -355,13 +355,13 @@ async function handleAvisCommand(message) {
 
   const args = message.content.trim().split(/\s+/);
   if (args.length < 2) {
-    await message.reply('❌ Utilisation : `+pr @shopOwner`');
+    await message.reply('❌ Utilisation : `!pr @shopOwner`');
     return;
   }
 
   const mentioned = message.mentions.users.first();
   if (!mentioned) {
-    await message.reply('❌ Tu dois mentionner le vendeur (`+pr @pseudo`).');
+    await message.reply('❌ Tu dois mentionner le vendeur (`!pr @pseudo`).');
     return;
   }
 
@@ -506,7 +506,7 @@ client.on('messageCreate', async (message) => {
         { upsert: true, new: true }
       );
 
-      await message.reply('✅ Ce salon est maintenant configuré comme **salon d\'avis** pour la commande `+pr`.');
+      await message.reply('✅ Ce salon est maintenant configuré comme **salon d\'avis** pour la commande `!pr`.');
       return;
     }
 
@@ -515,7 +515,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (content.startsWith('+pr')) {
+    if (content.startsWith('!pr')) {
       await handleAvisCommand(message);
       return;
     }

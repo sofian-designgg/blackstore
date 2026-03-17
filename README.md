@@ -36,5 +36,5 @@ npm start
 
 - `!create @user` : (admin) crée un salon de shop pour l'utilisateur.
 - `!ping` : dans un salon de shop, permet de ping `@everyone` (3 fois par 5 jours, rôle spécial + admin).
-- `+pr @vendeur` : laisse un avis sur un vendeur, qui sera posté dans son salon de shop en fil.
+- `!pr @vendeur` : laisse un avis sur un vendeur, qui sera posté dans son salon de shop en fil.
 
