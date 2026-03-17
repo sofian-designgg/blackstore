@@ -74,10 +74,11 @@ const warnSchema = new mongoose.Schema({
 const Shop = mongoose.model('Shop', shopSchema);
 const Warn = mongoose.model('Warn', warnSchema);
 
-// Config par serveur (ex: salon d'avis)
+// Config par serveur (ex: salon d'avis, auto-rôle)
 const guildConfigSchema = new mongoose.Schema({
   guildId: { type: String, unique: true, index: true },
-  avisChannelId: { type: String, default: null }
+  avisChannelId: { type: String, default: null },
+  joinRoleId: { type: String, default: null }
 });
 
 const GuildConfig = mongoose.model('GuildConfig', guildConfigSchema);
@@ -510,6 +511,30 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    if (content.startsWith('!setjoinrole')) {
+      const member = message.member;
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await message.reply('❌ Seuls les administrateurs peuvent configurer le rôle à l\'arrivée.');
+        return;
+      }
+
+      const role = message.mentions.roles.first();
+      if (!role) {
+        await message.reply('❌ Utilisation : `!setjoinrole @role`');
+        return;
+      }
+
+      const guildId = message.guild.id;
+      await GuildConfig.findOneAndUpdate(
+        { guildId },
+        { joinRoleId: role.id },
+        { upsert: true, new: true }
+      );
+
+      await message.reply(`✅ Le rôle ${role} sera maintenant donné automatiquement aux nouveaux membres à leur arrivée.`);
+      return;
+    }
+
     if (content === '!ping') {
       await handlePing(message);
       return;
@@ -521,6 +546,23 @@ client.on('messageCreate', async (message) => {
     }
   } catch (err) {
     console.error('Erreur messageCreate', err);
+  }
+});
+
+// ---------- AUTO-RÔLE À L'ARRIVÉE ----------
+
+client.on('guildMemberAdd', async (member) => {
+  try {
+    const guildId = member.guild.id;
+    const cfg = await GuildConfig.findOne({ guildId }).catch(() => null);
+    if (!cfg || !cfg.joinRoleId) return;
+
+    const role = member.guild.roles.cache.get(cfg.joinRoleId);
+    if (!role) return;
+
+    await member.roles.add(role, 'Auto-rôle à l\'arrivée (config bot)');
+  } catch (err) {
+    console.error('Erreur auto-rôle à l\'arrivée', err);
   }
 });
 
