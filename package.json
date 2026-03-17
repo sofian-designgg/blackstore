@@ -1,0 +1,17 @@
+{
+  "name": "blackstore-discord-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord Black Store (shops, pings, avis, avertissements)",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "mongoose": "^8.8.0"
+  }
+}
