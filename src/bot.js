@@ -15,7 +15,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildPresences
   ],
   partials: [Partials.Channel, Partials.Message]
 });
@@ -59,6 +60,7 @@ mongoose
 
 const shopSchema = new mongoose.Schema({
   channelId: { type: String, unique: true, index: true },
+  guildId: { type: String, index: true },
   ownerId: String,
   createdAt: { type: Date, default: () => new Date() },
   createdBy: String,
@@ -71,14 +73,28 @@ const warnSchema = new mongoose.Schema({
   count: { type: Number, default: 0 }
 });
 
+const avisSchema = new mongoose.Schema({
+  guildId: { type: String, index: true },
+  shopChannelId: String,
+  sellerId: String,
+  buyerId: String,
+  note: Number,
+  createdAt: { type: Date, default: () => new Date() }
+});
+
 const Shop = mongoose.model('Shop', shopSchema);
 const Warn = mongoose.model('Warn', warnSchema);
+const Avis = mongoose.model('Avis', avisSchema);
 
-// Config par serveur (ex: salon d'avis, auto-rôle)
+// Config par serveur (ex: salon d'avis, auto-rôle, stats)
 const guildConfigSchema = new mongoose.Schema({
   guildId: { type: String, unique: true, index: true },
   avisChannelId: { type: String, default: null },
-  joinRoleId: { type: String, default: null }
+  joinRoleId: { type: String, default: null },
+  statsTotalMembersChannelId: { type: String, default: null },
+  statsOnlineMembersChannelId: { type: String, default: null },
+  statsProofChannelId: { type: String, default: null },
+  statsStoreChannelId: { type: String, default: null }
 });
 
 const GuildConfig = mongoose.model('GuildConfig', guildConfigSchema);
@@ -124,7 +140,128 @@ client.once('ready', () => {
   cron.schedule('0 10 * * *', () => {
     checkShopRents().catch(console.error);
   });
+
+  // Mise à jour des salons de stats toutes les 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      for (const guild of client.guilds.cache.values()) {
+        await updateGuildStats(guild);
+      }
+    } catch (err) {
+      console.error('Erreur mise à jour stats', err);
+    }
+  });
 });
+
+// ---------- STATS SERVEUR ----------
+
+async function ensureStatsChannels(guild) {
+  const guildId = guild.id;
+  let cfg = await GuildConfig.findOne({ guildId });
+
+  const category = guild.channels.cache.get(CONFIG.shopCategoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) return null;
+
+  const everyoneRole = guild.roles.everyone;
+
+  async function getOrCreateVoice(idKey, baseName) {
+    let channel = null;
+    if (cfg && cfg[idKey]) {
+      channel = guild.channels.cache.get(cfg[idKey]) || null;
+    }
+    if (!channel) {
+      channel = await guild.channels.create({
+        name: baseName,
+        type: ChannelType.GuildVoice,
+        parent: category,
+        permissionOverwrites: [
+          {
+            id: everyoneRole.id,
+            allow: [PermissionsBitField.Flags.ViewChannel],
+            deny: [PermissionsBitField.Flags.Connect]
+          }
+        ]
+      });
+      cfg = await GuildConfig.findOneAndUpdate(
+        { guildId },
+        { [idKey]: channel.id },
+        { upsert: true, new: true }
+      );
+    }
+    return channel;
+  }
+
+  const totalMembersChannel = await getOrCreateVoice(
+    'statsTotalMembersChannelId',
+    '👥・Total: 0'
+  );
+  const onlineMembersChannel = await getOrCreateVoice(
+    'statsOnlineMembersChannelId',
+    '🟢・En ligne: 0'
+  );
+  const proofChannel = await getOrCreateVoice('statsProofChannelId', '📁・Proofs: 0');
+  const storeChannel = await getOrCreateVoice('statsStoreChannelId', '🏪・Stores: 0');
+
+  return {
+    totalMembersChannel,
+    onlineMembersChannel,
+    proofChannel,
+    storeChannel
+  };
+}
+
+async function updateGuildStats(guild) {
+  try {
+    const guildId = guild.id;
+    const cfg = await GuildConfig.findOne({ guildId });
+    if (!cfg) return;
+
+    const category = guild.channels.cache.get(CONFIG.shopCategoryId);
+    if (!category || category.type !== ChannelType.GuildCategory) return;
+
+    const totalMembersChannel = cfg.statsTotalMembersChannelId
+      ? guild.channels.cache.get(cfg.statsTotalMembersChannelId)
+      : null;
+    const onlineMembersChannel = cfg.statsOnlineMembersChannelId
+      ? guild.channels.cache.get(cfg.statsOnlineMembersChannelId)
+      : null;
+    const proofChannel = cfg.statsProofChannelId
+      ? guild.channels.cache.get(cfg.statsProofChannelId)
+      : null;
+    const storeChannel = cfg.statsStoreChannelId
+      ? guild.channels.cache.get(cfg.statsStoreChannelId)
+      : null;
+
+    // Si aucun salon n'est configuré, on ne fait rien (il faut d'abord !stats)
+    if (!totalMembersChannel && !onlineMembersChannel && !proofChannel && !storeChannel) {
+      return;
+    }
+
+    const members = await guild.members.fetch();
+    const totalMembers = members.size;
+    const onlineMembers = members.filter(
+      (m) => m.presence && m.presence.status && m.presence.status !== 'offline'
+    ).size;
+
+    const totalProofs = await Avis.countDocuments({ guildId });
+    const totalStores = await Shop.countDocuments({ guildId });
+
+    if (totalMembersChannel) {
+      await totalMembersChannel.setName(`👥・Total: ${totalMembers}`).catch(() => {});
+    }
+    if (onlineMembersChannel) {
+      await onlineMembersChannel.setName(`🟢・En ligne: ${onlineMembers}`).catch(() => {});
+    }
+    if (proofChannel) {
+      await proofChannel.setName(`📁・Proofs: ${totalProofs}`).catch(() => {});
+    }
+    if (storeChannel) {
+      await storeChannel.setName(`🏪・Stores: ${totalStores}`).catch(() => {});
+    }
+  } catch (err) {
+    console.error(`Erreur updateGuildStats pour ${guild.id}`, err);
+  }
+}
 
 // ---------- GESTION SHOPS ----------
 
@@ -164,6 +301,7 @@ async function createShop(message, targetMember) {
   await Shop.findOneAndUpdate(
     { channelId: channel.id },
     {
+      guildId: guild.id,
       ownerId: targetMember.id,
       createdAt,
       createdBy: message.author.id,
@@ -460,6 +598,19 @@ async function handleAvisCommand(message) {
   await thread.send('📎 Merci de poster ici ta **preuve d\'achat / de réception** (screen / reçu / etc.).');
 
   await message.reply(`✅ Ton avis a bien été ajouté dans le shop de ${mentioned} (${shopChannel}).`);
+
+  // Enregistrement de l'avis pour les stats
+  try {
+    await Avis.create({
+      guildId,
+      shopChannelId: shop.channelId,
+      sellerId: mentioned.id,
+      buyerId: message.author.id,
+      note
+    });
+  } catch (err) {
+    console.error('Erreur enregistrement avis', err);
+  }
 }
 
 // ---------- MESSAGE CREATE ----------
@@ -535,6 +686,25 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    if (content === '!stats') {
+      const member = message.member;
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await message.reply('❌ Seuls les administrateurs peuvent configurer les salons de statistiques.');
+        return;
+      }
+
+      const guild = message.guild;
+      const created = await ensureStatsChannels(guild);
+      if (!created) {
+        await message.reply('⚠️ Impossible de créer les salons de stats. Vérifie que l\'ID de catégorie est correct dans le bot.');
+        return;
+      }
+
+      await updateGuildStats(guild);
+      await message.reply('✅ Les salons de statistiques ont été créés/mis à jour en haut de la catégorie configurée.');
+      return;
+    }
+
     if (content === '!ping') {
       await handlePing(message);
       return;
@@ -563,6 +733,24 @@ client.on('guildMemberAdd', async (member) => {
     await member.roles.add(role, 'Auto-rôle à l\'arrivée (config bot)');
   } catch (err) {
     console.error('Erreur auto-rôle à l\'arrivée', err);
+  }
+});
+
+// ---------- COMMANDE LEGIT ----------
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (!message.guild) return;
+    if (message.author.bot) return;
+
+    const content = message.content.trim();
+    if (content === '!legit') {
+      const msg = await message.channel.send('❓ **Est-ce qu\'on est legit ?**');
+      await msg.react('✅');
+      await msg.react('❌');
+    }
+  } catch (err) {
+    console.error('Erreur commande !legit', err);
   }
 });
 
