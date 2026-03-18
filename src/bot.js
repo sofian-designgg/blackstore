@@ -29,6 +29,7 @@ const CONFIG = {
   avisChannelId: '1482065735726403829', // ancien ID (optionnel)
   avisChannelName: '🍂・proof', // nom du salon d'avis
   statsCategoryId: '1483556393519943913',
+  allowedLinkRoleId: '1482108953503731963',
   shopPriceEuros: 3,
   shopNamePrefix: '💸・',
   maxPingsPerWindow: 3,
@@ -92,6 +93,7 @@ const guildConfigSchema = new mongoose.Schema({
   guildId: { type: String, unique: true, index: true },
   avisChannelId: { type: String, default: null },
   joinRoleId: { type: String, default: null },
+  allowedLinkRoleId: { type: String, default: null },
   statsTotalMembersChannelId: { type: String, default: null },
   statsOnlineMembersChannelId: { type: String, default: null },
   statsProofChannelId: { type: String, default: null },
@@ -441,6 +443,20 @@ const LINK_REGEX = /(https?:\/\/|discord\.gg\/|www\.)/i;
 async function handlePotentialLink(message) {
   if (message.author.bot) return;
   if (!LINK_REGEX.test(message.content)) return;
+  if (!message.guild) return;
+
+  // Autoriser les liens uniquement si le membre a le rôle autorisé (ou admin)
+  const member = message.member;
+  if (member) {
+    const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
+    if (isAdmin) return;
+
+    const guildCfg = await GuildConfig.findOne({ guildId: message.guild.id }).catch(() => null);
+    const allowedRoleId = guildCfg?.allowedLinkRoleId || CONFIG.allowedLinkRoleId;
+    if (allowedRoleId && member.roles.cache.has(allowedRoleId)) {
+      return;
+    }
+  }
 
   try {
     await message.delete().catch(() => {});
@@ -694,6 +710,30 @@ client.on('messageCreate', async (message) => {
       );
 
       await message.reply(`✅ Le rôle ${role} sera maintenant donné automatiquement aux nouveaux membres à leur arrivée.`);
+      return;
+    }
+
+    if (content.startsWith('!setlinkrole')) {
+      const member = message.member;
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await message.reply('❌ Seuls les administrateurs peuvent configurer le rôle autorisé à envoyer des liens.');
+        return;
+      }
+
+      const role = message.mentions.roles.first();
+      if (!role) {
+        await message.reply('❌ Utilisation : `!setlinkrole @role`');
+        return;
+      }
+
+      const guildId = message.guild.id;
+      await GuildConfig.findOneAndUpdate(
+        { guildId },
+        { allowedLinkRoleId: role.id },
+        { upsert: true, new: true }
+      );
+
+      await message.reply(`✅ Seuls les membres avec ${role} (ou les admins) peuvent maintenant envoyer des liens.`);
       return;
     }
 
