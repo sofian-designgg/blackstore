@@ -1,58 +1,56 @@
-# Bot Discord Black Store
+# Bot Discord Black Store v2
 
-Bot pour ton serveur **Black Store** avec :
-- création de shops
-- gestion de pings `@everyone`
-- anti-pub / avertissements
-- système d'avis clients
+Bot entièrement configurable via commandes — **aucun ID en dur**.
 
 ## Installation
-
-1. Installer les dépendances :
 
 ```bash
 npm install
 ```
 
-2. Créer un fichier `.env` à la racine en copiant `.env.example` :
-
-```bash
-cp .env.example .env
+Créer `.env` :
 ```
-
-Puis mettre ton token de bot :
-
-```env
-DISCORD_TOKEN=ton_token_ici
+DISCORD_TOKEN=ton_token
+MONGO_URL=ta_url_mongo_railway
 ```
-
-3. Lancer le bot :
 
 ```bash
 npm start
 ```
 
+## Configuration — tout se set directement sur le bot
+
+Un **admin** configure tout via les commandes :
+
+| Commande | Description |
+|----------|-------------|
+| `!setcategory shop #cat` | Catégorie des shops |
+| `!setcategory stats #cat` | Catégorie des stats |
+| `!setavis` | Salon proof (dans le salon) |
+| `!setpingrole @role` | Rôle pour !ping |
+| `!setlinkrole @role` | Rôle autorisé liens |
+| `!setjoinrole @role` | Rôle à l'arrivée |
+| `!setshopprefix 💸・` | Préfixe des noms de shop |
+| `!setloyer 3` | Prix hébergement (€) |
+| `!setinvite https://...` | Lien serveur (rappel loyer) |
+| `!setpings 3` | Nb pings par période |
+| `!setpingdays 5` | Période pings (jours) |
+| `!setwarns 5` | Avertissements avant mute |
+| `!setmutedays 5` | Durée mute (jours) |
+| `!setrentdays 14` | Rappel loyer (tous les X jours) |
+| `!config` | Voir toute la config |
+
 ## Commandes
 
 ### Shops
-| Commande | Qui | Description |
-|----------|-----|-------------|
-| `!create @user` | Admin | Crée un salon shop `💸・pseudo` dans la catégorie des shops. Lie automatiquement le salon au vendeur. |
-| `!linkshop @vendeur #salon` | Admin | Lie un salon à un vendeur (depuis n'importe où). Les avis `!pr @vendeur` iront dans ce salon. |
-| `!registershop @vendeur` | Admin | Même chose, à utiliser **dans** le salon du shop. |
-| `!ping` | Proprio + rôle ping ou Admin | Dans un shop, ping `@everyone` (3/5 jours). |
+- `!create @user` — Créer un shop (admin)
+- `!linkshop @vendeur #salon` — Lier un salon à un vendeur
+- `!registershop @vendeur` — Idem, dans le salon
+- `!checkshop @vendeur` — Vérifier si un shop existe
 
-### Avis / Proof
-| Commande | Qui | Description |
-|----------|-----|-------------|
-| `!pr @vendeur` | Tout le monde | Dans le salon proof, laisse un avis (note /10, commande, message). Posté dans le shop du vendeur + fil pour preuve. |
-| `!setavis` | Admin | À utiliser dans le salon proof. Définit ce salon pour `!pr`. |
-
-### Config
-| Commande | Qui | Description |
-|----------|-----|-------------|
-| `!setjoinrole @role` | Admin | Rôle donné aux nouveaux membres à l'arrivée. |
-| `!setlinkrole @role` | Admin | Rôle autorisé à envoyer des liens (autres = avertissement). |
-| `!stats` | Admin | Crée les salons vocaux de stats (Total, En ligne, Proofs, Stores). |
-| `!legit` | Tout le monde | Envoie « Est-ce qu'on est legit ? » avec ✅ et ❌. |
-
+### Usage
+- `!ping` — Annonce dans ton shop (3/5 jours)
+- `!pr @vendeur` — Laisser un avis (dans le salon proof)
+- `!stats` — Créer les salons de stats
+- `!legit` — Poll "Est-ce qu'on est legit ?"
+- `!help` — Liste des commandes
