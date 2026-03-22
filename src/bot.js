@@ -748,21 +748,38 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (content.startsWith('!registershop')) {
+    if (content.startsWith('!linkshop') || content.startsWith('!registershop')) {
       const member = message.member;
       if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-        await message.reply('❌ Seuls les administrateurs peuvent enregistrer un shop.');
+        await message.reply('❌ Seuls les administrateurs peuvent lier un shop à un vendeur.');
         return;
       }
 
       const targetUser = message.mentions.members.first();
       if (!targetUser) {
-        await message.reply('❌ Utilisation : `!registershop @user` (à utiliser dans le salon du shop).');
+        await message.reply(
+          '❌ Utilisation :\n' +
+            '• `!linkshop @vendeur #salon` — depuis n\'importe où\n' +
+            '• `!registershop @vendeur` — à utiliser **dans** le salon du shop'
+        );
         return;
       }
 
       const guild = message.guild;
-      const channel = message.channel;
+
+      // Si on a mentionné un salon (#salon), l'utiliser ; sinon utiliser le salon actuel
+      const channelMatch = content.match(/<#(\d+)>/);
+      let channel;
+
+      if (channelMatch) {
+        channel = await guild.channels.fetch(channelMatch[1]).catch(() => null);
+        if (!channel || channel.type !== ChannelType.GuildText) {
+          await message.reply('❌ Salon invalide ou introuvable. Mentionne un salon texte avec `#nom-du-salon`.');
+          return;
+        }
+      } else {
+        channel = message.channel;
+      }
 
       await Shop.findOneAndUpdate(
         { channelId: channel.id },
@@ -778,7 +795,11 @@ client.on('messageCreate', async (message) => {
         { upsert: true, new: true }
       );
 
-      await message.reply(`✅ Ce salon est maintenant enregistré comme le shop de ${targetUser}. La commande \`!pr @${targetUser.user.username}\` fonctionnera.`);
+      await updateGuildStats(guild).catch(() => {});
+
+      await message.reply(
+        `✅ ${channel} est maintenant lié au shop de ${targetUser}. Les avis \`!pr @${targetUser.user.username}\` seront postés ici.`
+      );
       return;
     }
 
