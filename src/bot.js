@@ -531,17 +531,28 @@ async function handleAvisCommand(message) {
   const guild = message.guild;
   if (!guild) return;
 
-  // Trouver le shop du vendeur mentionné
-  const shop = await Shop.findOne({ ownerId: mentioned.id });
+  // Trouver le shop du vendeur mentionné (même serveur)
+  const shop = await Shop.findOne({
+    ownerId: mentioned.id,
+    $or: [{ guildId: guild.id }, { guildId: null }, { guildId: { $exists: false } }]
+  });
 
   if (!shop) {
-    await message.reply('❌ Ce vendeur ne possède pas de shop enregistré.');
+    await message.reply('❌ Ce vendeur ne possède pas de shop enregistré sur ce serveur.');
     return;
   }
 
   const shopChannel = await client.channels.fetch(shop.channelId).catch(() => null);
   if (!shopChannel || shopChannel.type !== ChannelType.GuildText) {
-    await message.reply('⚠️ Le salon de shop lié à ce vendeur est introuvable.');
+    await message.reply(
+      '⚠️ Le salon de shop lié à ce vendeur est introuvable (supprimé ?). Un admin peut faire `!registershop @vendeur` dans le salon du shop pour le re-lier.'
+    );
+    return;
+  }
+
+  // Vérifier que le salon est bien sur ce serveur
+  if (shopChannel.guildId !== guild.id) {
+    await message.reply('❌ Ce shop appartient à un autre serveur.');
     return;
   }
 
@@ -734,6 +745,40 @@ client.on('messageCreate', async (message) => {
       );
 
       await message.reply(`✅ Seuls les membres avec ${role} (ou les admins) peuvent maintenant envoyer des liens.`);
+      return;
+    }
+
+    if (content.startsWith('!registershop')) {
+      const member = message.member;
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await message.reply('❌ Seuls les administrateurs peuvent enregistrer un shop.');
+        return;
+      }
+
+      const targetUser = message.mentions.members.first();
+      if (!targetUser) {
+        await message.reply('❌ Utilisation : `!registershop @user` (à utiliser dans le salon du shop).');
+        return;
+      }
+
+      const guild = message.guild;
+      const channel = message.channel;
+
+      await Shop.findOneAndUpdate(
+        { channelId: channel.id },
+        {
+          channelId: channel.id,
+          guildId: guild.id,
+          ownerId: targetUser.id,
+          createdAt: new Date(),
+          createdBy: message.author.id,
+          pingCount: 0,
+          pingWindowStart: new Date()
+        },
+        { upsert: true, new: true }
+      );
+
+      await message.reply(`✅ Ce salon est maintenant enregistré comme le shop de ${targetUser}. La commande \`!pr @${targetUser.user.username}\` fonctionnera.`);
       return;
     }
 
