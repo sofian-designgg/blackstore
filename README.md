@@ -26,7 +26,7 @@ Un **admin** configure tout via les commandes :
 |----------|-------------|
 | `!setcategory shop #cat` | Catégorie des shops |
 | `!setcategory stats #cat` | Catégorie des stats |
-| `!setavis` | Salon proof (dans le salon) |
+| `!setprf` ou `!setprf #salon` | Salon où les avis créent des fils |
 | `!setpingrole @role` | Rôle pour !ping |
 | `!setlinkrole @role` | Rôle autorisé liens |
 | `!setjoinrole @role` | Rôle à l'arrivée |
@@ -50,7 +50,7 @@ Un **admin** configure tout via les commandes :
 
 ### Usage
 - `!ping` — Annonce dans ton shop (3/5 jours)
-- `!pr @vendeur` — Laisser un avis (dans le salon proof)
+- `!prf` — Laisser un avis (questionnaire → fil dans le salon configuré)
 - `!stats` — Créer les salons de stats
 - `!legit` — Poll "Est-ce qu'on est legit ?"
 - `!help` — Liste des commandes

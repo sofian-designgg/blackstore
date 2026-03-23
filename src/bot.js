@@ -78,6 +78,7 @@ const GuildConfig = mongoose.model('GuildConfig', new mongoose.Schema({
   shopCategoryId: String,
   statsCategoryId: String,
   avisChannelId: String,
+  prfChannelId: String,
   pingRoleId: String,
   allowedLinkRoleId: String,
   joinRoleId: String,
@@ -355,11 +356,14 @@ client.on('messageCreate', async (message) => {
       return message.reply(`✅ Catégorie stats : **${cat.name}**`);
     }
 
-    // ─── !setavis
-    if (content === '!setavis') {
+    // ─── !setprf
+    if (content === '!setprf' || content.startsWith('!setprf ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      await setConfig(message.guild.id, { avisChannelId: message.channel.id });
-      return message.reply('✅ Salon proof configuré pour `!pr`.');
+      const ch = message.mentions.channels.first();
+      const targetChannel = ch ? await message.guild.channels.fetch(ch.id).catch(() => null) : message.channel;
+      if (!targetChannel || targetChannel.type !== ChannelType.GuildText) return message.reply('❌ `!setprf` (dans le salon) ou `!setprf #salon`');
+      await setConfig(message.guild.id, { prfChannelId: targetChannel.id });
+      return message.reply(`✅ Salon proof : ${targetChannel}. Les avis \`!prf\` créeront des fils ici.`);
     }
 
     // ─── !setpingrole
@@ -468,7 +472,7 @@ client.on('messageCreate', async (message) => {
         '📋 **Config**',
         cfg?.shopCategoryId ? `🛒 Shops : <#${cfg.shopCategoryId}>` : '🛒 Shops : —',
         cfg?.statsCategoryId ? `📊 Stats : <#${cfg.statsCategoryId}>` : '📊 Stats : —',
-        cfg?.avisChannelId ? `⭐ Proof : <#${cfg.avisChannelId}>` : '⭐ Proof : —',
+        cfg?.prfChannelId ? `⭐ Proof/avis : <#${cfg.prfChannelId}>` : '⭐ Proof : —',
         cfg?.pingRoleId ? `🔔 Ping : <@&${cfg.pingRoleId}>` : '🔔 Ping : —',
         cfg?.allowedLinkRoleId ? `🔗 Liens : <@&${cfg.allowedLinkRoleId}>` : '🔗 Liens : —',
         cfg?.joinRoleId ? `👋 Arrivée : <@&${cfg.joinRoleId}>` : '👋 Arrivée : —',
@@ -501,7 +505,7 @@ client.on('messageCreate', async (message) => {
       const ch = m ? await message.guild.channels.fetch(m[1]).catch(() => null) : message.channel;
       if (!ch || ch.type !== ChannelType.GuildText) return message.reply('❌ Salon invalide.');
       await linkShop(message.guild, ch, target, message.author);
-      return message.reply(`✅ ${ch} lié à ${target}. \`!pr @${target.user.username}\` OK.`);
+      return message.reply(`✅ ${ch} lié à ${target}.`);
     }
 
     // ─── !checkshop
@@ -552,55 +556,66 @@ client.on('messageCreate', async (message) => {
       });
     }
 
-    // ─── !pr
-    if (content.startsWith('!pr ')) {
+    // ─── !prf — questionnaire avis puis crée un fil dans le salon configuré avec !setprf
+    if (content === '!prf') {
       const cfg = await getConfig(message.guild.id);
-      const avisId = cfg?.avisChannelId;
-      const ok = message.channel.id === avisId || message.channel.name?.includes('proof');
-      if (!ok) return message.reply('❌ Utilise `!pr @vendeur` dans le salon proof. Configure : `!setavis` dans ce salon.');
+      const prfChannelId = cfg?.prfChannelId;
+      if (!prfChannelId) return message.reply('❌ Un admin doit configurer : `!setprf` dans le salon où poster les avis.');
 
-      const seller = message.mentions.users.first();
-      if (!seller) return message.reply('❌ `!pr @vendeur`');
-
-      const shop = await Shop.findOne({ ownerId: seller.id, guildId: message.guild.id });
-      if (!shop) return message.reply(`❌ Aucun shop pour ${seller}. Admin : \`!linkshop @${seller.username} #salon\``);
-
-      let sch = client.channels.cache.get(shop.channelId) ?? await client.channels.fetch(shop.channelId).catch(() => null);
-      if (!sch || sch.type !== ChannelType.GuildText) return message.reply(`⚠️ Salon shop introuvable. Admin : \`!linkshop @${seller.username} #salon\``);
-      if (sch.guildId !== message.guild.id) return message.reply('❌ Shop sur un autre serveur.');
+      const prfChannel = await message.guild.channels.fetch(prfChannelId).catch(() => null);
+      if (!prfChannel || prfChannel.type !== ChannelType.GuildText) return message.reply('❌ Salon proof introuvable. Admin : `!setprf #salon`.');
 
       const filter = m => m.author.id === message.author.id;
 
-      await message.reply('⭐ Note sur 10 (ex: `9/10`).');
-      const n1 = await message.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
-      const n = parseInt(n1?.first()?.content?.match(/(\d{1,2})/)?.[1] ?? 'x', 10);
-      if (isNaN(n) || n < 0 || n > 10) return message.reply('❌ Note invalide.');
+      await message.reply('🛍️ **Quel produit as-tu acheté ?**');
+      const r1 = await message.channel.awaitMessages({ filter, max: 1, time: 90_000 }).catch(() => null);
+      const produit = r1?.first()?.content?.trim() || '—';
+      if (!r1?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
 
-      await message.reply('📝 Décris ta commande.');
-      const n2 = await message.channel.awaitMessages({ filter, max: 1, time: 120_000 }).catch(() => null);
-      const cmd = n2?.first()?.content?.trim() || '—';
+      await message.reply('👤 **Chez quel vendeur ?** (mention ou nom)');
+      const r2 = await message.channel.awaitMessages({ filter, max: 1, time: 90_000 }).catch(() => null);
+      const vendeur = r2?.first()?.content?.trim() || '—';
+      if (!r2?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
 
-      await message.reply('📦 Avis sur la commande ?');
-      const n3 = await message.channel.awaitMessages({ filter, max: 1, time: 180_000 }).catch(() => null);
-      const avis = n3?.first()?.content?.trim() || '—';
+      await message.reply('⭐ **Note sur 10 ?** (ex: `9`)');
+      const r3 = await message.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
+      const noteRaw = r3?.first()?.content?.trim() || '0';
+      const note = Math.min(10, Math.max(0, parseInt(noteRaw.replace(/\D/g, ''), 10) || 0));
+      if (!r3?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
 
-      const msg = await sch.send({
-        content: [
-          '🧾 **AVIS CLIENT**',
-          `👤 ${message.author} | 🛍️ ${seller} | ⭐ ${n}/10`,
-          `📦 ${cmd}`,
-          `💬 ${avis}`,
-          '',
-          '📎 Preuve en réponse.'
-        ].join('\n')
+      await message.reply('💬 **Ton commentaire / avis ?**');
+      const r4 = await message.channel.awaitMessages({ filter, max: 1, time: 120_000 }).catch(() => null);
+      const commentaire = r4?.first()?.content?.trim() || '—';
+      if (!r4?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
+
+      const contentMsg = [
+        '🧾 **NOUVEL AVIS CLIENT**',
+        '',
+        `👤 **Acheteur :** ${message.author}`,
+        `🛍️ **Produit :** ${produit}`,
+        `🏪 **Vendeur :** ${vendeur}`,
+        `⭐ **Note :** ${note}/10`,
+        '',
+        `💬 **Commentaire :** ${commentaire}`,
+        '',
+        '📎 **Poste ta preuve d\'achat dans le fil ci-dessous.**'
+      ].join('\n');
+
+      const msg = await prfChannel.send({ content: contentMsg });
+      const threadName = `Avis ${message.author.username} (${note}/10)`.slice(0, 100);
+      const thread = await msg.startThread({ name: threadName, autoArchiveDuration: 10080 });
+      await thread.send('📎 Poste ici ta **preuve** (screen, reçu, etc.).');
+
+      await Avis.create({
+        guildId: message.guild.id,
+        shopChannelId: prfChannel.id,
+        sellerId: null,
+        buyerId: message.author.id,
+        note
       });
-      const thread = await msg.startThread({ name: `Avis ${message.author.username} (${n}/10)`, autoArchiveDuration: 10080 });
-      await thread.send('📎 Poste ta preuve ici.');
-
-      await Avis.create({ guildId: message.guild.id, shopChannelId: shop.channelId, sellerId: seller.id, buyerId: message.author.id, note: n });
       await updateStats(message.guild).catch(() => {});
 
-      return message.reply(`✅ Avis posté dans le shop de ${seller} !`);
+      return message.reply(`✅ Avis posté dans ${prfChannel} ! Fil créé pour ta preuve.`);
     }
 
     // ─── !legit
@@ -617,14 +632,14 @@ client.on('messageCreate', async (message) => {
         '`!create @user` | `!linkshop @vendeur #salon` | `!registershop @vendeur` | `!checkshop @vendeur`',
         '',
         '**⚙️ Config (admin) — tout se set sur le bot**',
-        '`!setcategory shop #cat` | `!setcategory stats #cat` | `!setavis`',
+        '`!setcategory shop #cat` | `!setcategory stats #cat` | `!setprf` | `!setprf #salon`',
         '`!setpingrole @role` | `!setlinkrole @role` | `!setjoinrole @role`',
         '`!setshopprefix 💸・` | `!setloyer 3` | `!setinvite https://discord.gg/xxx`',
         '`!setpings 3` | `!setpingdays 5` | `!setwarns 5` | `!setmutedays 5` | `!setrentdays 14`',
         '`!config` — Voir toute la config',
         '',
         '**📢 Autres**',
-        '`!ping` | `!pr @vendeur` | `!stats` | `!legit`'
+        '`!ping` | `!prf` | `!stats` | `!legit`'
       ];
       return message.reply(help.join('\n'));
     }
