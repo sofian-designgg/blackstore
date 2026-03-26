@@ -218,6 +218,99 @@ function buildTicketPanelComponents(ticketId) {
   ];
 }
 
+function buildOpenTicketPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('📩 Ticket Proof')
+    .setDescription(
+      [
+        'Clique sur le bouton ci-dessous pour créer ton ticket de preuve.',
+        'Ensuite, un admin/staff va valider et envoyer la proof dans le salon configuré.'
+      ].join('\n')
+    )
+    .setColor(0x2a0b0b);
+}
+
+function buildOpenTicketPanelComponents() {
+  const openBtn = new ButtonBuilder()
+    .setCustomId('ticketOpenPanel')
+    .setLabel('🧾 Ouvrir mon ticket')
+    .setStyle(ButtonStyle.Success);
+
+  return [new ActionRowBuilder().addComponents(openBtn)];
+}
+
+async function createTicketForUser(guild, user, replyFn) {
+  const cfg = await getCfg(guild.id);
+  if (!cfg?.ticketCategoryId) {
+    return replyFn({ ok: false, err: '❌ Configure d’abord la categorie tickets: `!setcategory ticket #cat`' });
+  }
+
+  const existing = await Ticket.findOne({
+    guildId: guild.id,
+    buyerId: user.id,
+    status: 'open'
+  });
+
+  if (existing) {
+    return replyFn({ ok: false, err: '⏳ Tu as déjà un ticket ouvert.' });
+  }
+
+  const category = guild.channels.cache.get(cfg.ticketCategoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    return replyFn({ ok: false, err: '❌ Categorie tickets introuvable.' });
+  }
+
+  const orderId = generateOrderId();
+  const channelName = `📩・ticket-${user.username}`.slice(0, 90);
+
+  const everyoneId = guild.roles.everyone.id;
+  const staffRoleId = cfg?.ticketStaffRoleId;
+
+  const channel = await guild.channels
+    .create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: category,
+      permissionOverwrites: [
+        { id: everyoneId, deny: [PermissionsBitField.Flags.ViewChannel] },
+        {
+          id: user.id,
+          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+        },
+        ...(staffRoleId
+          ? [
+              {
+                id: staffRoleId,
+                allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+              }
+            ]
+          : [])
+      ]
+    })
+    .catch(() => null);
+
+  if (!channel) {
+    return replyFn({ ok: false, err: '❌ Impossible de créer le ticket.' });
+  }
+
+  const ticket = await Ticket.create({
+    guildId: guild.id,
+    channelId: channel.id,
+    buyerId: user.id,
+    orderId
+  });
+
+  const panelMsg = await channel.send({
+    embeds: [buildTicketPanelEmbed(ticket, cfg)],
+    components: buildTicketPanelComponents(ticket.id)
+  });
+
+  ticket.panelMessageId = panelMsg.id;
+  await ticket.save();
+
+  return replyFn({ ok: true, channel, orderId });
+}
+
 async function createTicket(message) {
   const cfg = await getCfg(message.guild.id);
   if (!cfg?.ticketCategoryId) {
@@ -237,47 +330,10 @@ async function createTicket(message) {
     return;
   }
 
-  const orderId = generateOrderId();
-  const channelName = `📩・ticket-${message.author.username}`.slice(0, 90);
-
-  const everyoneId = message.guild.roles.everyone.id;
-  const staffRoleId = cfg?.ticketStaffRoleId;
-
-  const channel = await message.guild.channels
-    .create({
-      name: channelName,
-      type: ChannelType.GuildText,
-      parent: category,
-      permissionOverwrites: [
-        { id: everyoneId, deny: [PermissionsBitField.Flags.ViewChannel] },
-        { id: message.author.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-        ...(staffRoleId
-          ? [{ id: staffRoleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }]
-          : [])
-      ]
-    })
-    .catch(() => null);
-
-  if (!channel) {
-    await message.reply('❌ Impossible de créer le ticket.');
-    return;
-  }
-
-  const ticket = await Ticket.create({
-    guildId: message.guild.id,
-    channelId: channel.id,
-    buyerId: message.author.id,
-    orderId
+  await createTicketForUser(message.guild, message.author, async (res) => {
+    if (!res.ok) return message.reply(res.err);
+    return message.reply(`✅ Ticket cree: ${res.channel}\n🆔 ID commande: \`${res.orderId}\``);
   });
-
-  const panelMsg = await channel.send({
-    embeds: [buildTicketPanelEmbed(ticket, cfg)],
-    components: buildTicketPanelComponents(ticket.id)
-  });
-
-  ticket.panelMessageId = panelMsg.id;
-  await ticket.save();
-  await message.reply(`✅ Ticket cree: ${channel}\n🆔 ID commande: \`${orderId}\``);
 }
 
 async function postProofFromTicket(interaction, ticket, cfg) {
@@ -901,6 +957,19 @@ client.on('messageCreate', async (message) => {
       return createTicket(message);
     }
 
+    if (text.startsWith('+sendticketpanel')) {
+      if (!admin) return message.reply('❌ Admin uniquement.');
+      const mentioned = message.mentions.channels.first();
+      const ch = mentioned ? message.guild.channels.cache.get(mentioned.id) : message.channel;
+      if (!ch || ch.type !== ChannelType.GuildText) return message.reply('❌ Salon invalide.');
+
+      await ch.send({
+        embeds: [buildOpenTicketPanelEmbed()],
+        components: buildOpenTicketPanelComponents()
+      });
+      return message.reply('✅ Panel ticket envoyé.');
+    }
+
     if (text === '+pr') {
       return runProofQuestionnaire(message);
     }
@@ -927,7 +996,7 @@ client.on('messageCreate', async (message) => {
         '`!create @user` | `!linkshop @user #salon` | `!registershop @user` | `!checkshop @user`',
         '',
         '**📣 UTILISATION**',
-        '`!ping` | `!ticket` | `+pr` | `!stats` | `!legit`'
+        '`!ping` | `!ticket` | `+ticket` | `+sendticketpanel` | `+pr` | `!stats` | `!legit`'
       ];
       await message.reply(help.join('\n'));
     }
@@ -943,6 +1012,16 @@ client.on('interactionCreate', async (interaction) => {
     const customId = interaction.customId || '';
 
     if (interaction.isButton()) {
+      if (customId === 'ticketOpenPanel') {
+        await interaction.deferReply({ ephemeral: true });
+        const res = await createTicketForUser(interaction.guild, interaction.user, async (r) => r);
+        if (!res?.ok) {
+          return interaction.editReply(res.err || '❌ Erreur lors de la creation du ticket.');
+        }
+
+        return interaction.editReply(`✅ Ticket cree: ${res.channel}\n🆔 ID commande: \`${res.orderId}\``);
+      }
+
       if (customId.startsWith('ticketFill:')) {
         const ticketId = customId.split(':')[1];
         const ticket = await Ticket.findById(ticketId).lean();

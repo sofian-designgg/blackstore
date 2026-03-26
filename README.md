@@ -55,6 +55,7 @@ Un **admin** configure tout via les commandes :
 - `!ping` — Annonce dans ton shop (3/5 jours)
 - `!prf` — Laisser un avis (questionnaire → fil dans le salon configuré)
 - `!ticket` — Créer un ticket proof (ID commande + bouton -> envoi dans `!setprf`)
+- `+sendticketpanel` — Envoyer le panel de tickets (bouton)
 - `!stats` — Créer les salons de stats
 - `!legit` — Poll "Est-ce qu'on est legit ?"
 - `!help` — Liste des commandes
