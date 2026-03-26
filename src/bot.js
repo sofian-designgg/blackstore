@@ -38,9 +38,10 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildPresences
+    GatewayIntentBits.GuildPresences,
+    GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message]
 });
 
 const mongoUrl = process.env.MONGO_URL;
