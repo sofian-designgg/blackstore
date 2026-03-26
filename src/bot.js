@@ -1,8 +1,7 @@
 /**
- * Bot Discord Black Store v2
- * TOUT configurable via commandes !set — 100% sur le bot
+ * Black Store Bot - clean rebuild
+ * Tout configurable via Discord avec !set...
  */
-
 require('dotenv').config();
 
 const {
@@ -15,11 +14,16 @@ const {
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 
-const DEFAULTS = { shopNamePrefix: '💸・', shopPriceEuros: 3, maxPings: 3, pingDays: 5, muteDays: 5, maxWarns: 5, rentDays: 14, inviteLink: 'https://discord.gg/example' };
-
-// ═══════════════════════════════════════════════════════════════
-// CLIENT
-// ═══════════════════════════════════════════════════════════════
+const DEFAULTS = {
+  shopNamePrefix: '💸・',
+  shopPriceEuros: 3,
+  maxPings: 3,
+  pingDays: 5,
+  maxWarns: 5,
+  muteDays: 5,
+  rentDays: 14,
+  inviteLink: 'https://discord.gg/sayuri'
+};
 
 const client = new Client({
   intents: [
@@ -29,641 +33,683 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildPresences
   ],
-  partials: [Partials.Channel, Partials.Message]
+  partials: [Partials.Channel]
 });
-
-// ═══════════════════════════════════════════════════════════════
-// MONGODB
-// ═══════════════════════════════════════════════════════════════
 
 const mongoUrl = process.env.MONGO_URL;
 if (!mongoUrl) {
-  console.error('❌ MONGO_URL manquant.');
+  console.error('MONGO_URL manquant.');
   process.exit(1);
 }
 
-mongoose.connect(mongoUrl, { serverSelectionTimeoutMS: 30000 })
-  .then(() => console.log('✅ MongoDB connecté'))
-  .catch(err => {
-    console.error('❌ MongoDB', err);
+mongoose
+  .connect(mongoUrl, { serverSelectionTimeoutMS: 30000 })
+  .then(() => console.log('MongoDB connecte'))
+  .catch((err) => {
+    console.error('Erreur MongoDB', err);
     process.exit(1);
   });
 
-const Shop = mongoose.model('Shop', new mongoose.Schema({
-  channelId: { type: String, unique: true, required: true },
-  guildId: { type: String, required: true, index: true },
-  ownerId: { type: String, required: true, index: true },
-  createdAt: { type: Date, default: Date.now },
-  createdBy: String,
-  pingCount: { type: Number, default: 0 },
-  pingWindowStart: { type: Date, default: Date.now }
-}));
+const GuildConfig = mongoose.model(
+  'GuildConfig',
+  new mongoose.Schema({
+    guildId: { type: String, unique: true, required: true },
+    shopCategoryId: String,
+    statsCategoryId: String,
+    proofChannelId: String,
+    pingRoleId: String,
+    allowedLinkRoleId: String,
+    joinRoleId: String,
+    shopNamePrefix: String,
+    shopPriceEuros: Number,
+    maxPings: Number,
+    pingDays: Number,
+    maxWarns: Number,
+    muteDays: Number,
+    rentDays: Number,
+    inviteLink: String,
+    statsTotalMembersChannelId: String,
+    statsOnlineMembersChannelId: String,
+    statsProofCountChannelId: String,
+    statsProofAvgChannelId: String,
+    statsStoreChannelId: String
+  })
+);
 
-const Warn = mongoose.model('Warn', new mongoose.Schema({
-  userId: { type: String, unique: true, required: true },
-  count: { type: Number, default: 0 }
-}));
+const Shop = mongoose.model(
+  'Shop',
+  new mongoose.Schema({
+    guildId: { type: String, index: true, required: true },
+    channelId: { type: String, unique: true, required: true },
+    ownerId: { type: String, index: true, required: true },
+    createdBy: String,
+    createdAt: { type: Date, default: Date.now },
+    pingCount: { type: Number, default: 0 },
+    pingWindowStart: { type: Date, default: Date.now }
+  })
+);
 
-const Avis = mongoose.model('Avis', new mongoose.Schema({
-  guildId: { type: String, required: true, index: true },
-  shopChannelId: String,
-  sellerId: String,
-  buyerId: String,
-  note: Number,
-  createdAt: { type: Date, default: Date.now }
-}));
+const Warn = mongoose.model(
+  'Warn',
+  new mongoose.Schema({
+    guildId: { type: String, index: true, required: true },
+    userId: { type: String, index: true, required: true },
+    count: { type: Number, default: 0 }
+  })
+);
 
-const GuildConfig = mongoose.model('GuildConfig', new mongoose.Schema({
-  guildId: { type: String, unique: true, required: true },
-  shopCategoryId: String,
-  statsCategoryId: String,
-  avisChannelId: String,
-  prfChannelId: String,
-  pingRoleId: String,
-  allowedLinkRoleId: String,
-  joinRoleId: String,
-  shopNamePrefix: String,
-  shopPriceEuros: Number,
-  maxPings: Number,
-  pingDays: Number,
-  muteDays: Number,
-  maxWarns: Number,
-  rentDays: Number,
-  inviteLink: String,
-  statsTotalMembersChannelId: String,
-  statsOnlineMembersChannelId: String,
-  statsProofChannelId: String,
-  statsStoreChannelId: String
-}, { strict: false }));
+Warn.schema.index({ guildId: 1, userId: 1 }, { unique: true });
 
-// ═══════════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════════
+const Proof = mongoose.model(
+  'Proof',
+  new mongoose.Schema({
+    guildId: { type: String, index: true, required: true },
+    buyerId: { type: String, required: true },
+    orderId: { type: String, required: true },
+    product: { type: String, required: true },
+    comment: { type: String, required: true },
+    stars: { type: Number, required: true },
+    createdAt: { type: Date, default: Date.now }
+  })
+);
 
-async function getConfig(guildId) {
+async function getCfg(guildId) {
   return GuildConfig.findOne({ guildId }).lean();
 }
 
-async function setConfig(guildId, update) {
-  return GuildConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true, new: true });
+async function setCfg(guildId, patch) {
+  return GuildConfig.findOneAndUpdate({ guildId }, { $set: patch }, { upsert: true, new: true });
 }
 
-function opt(cfg, key, def) {
-  const v = cfg?.[key];
-  return v !== undefined && v !== null ? v : def;
+function val(cfg, key) {
+  return cfg?.[key] !== undefined && cfg?.[key] !== null ? cfg[key] : DEFAULTS[key];
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CRON
-// ═══════════════════════════════════════════════════════════════
+function isAdmin(member) {
+  return member?.permissions?.has(PermissionsBitField.Flags.Administrator);
+}
 
-client.once('ready', () => {
-  console.log(`✅ Bot : ${client.user.tag}`);
-  cron.schedule('0 */12 * * *', () => resetPings());
-  cron.schedule('0 10 * * *', () => checkRents());
-  cron.schedule('*/5 * * * *', async () => { for (const g of client.guilds.cache.values()) updateStats(g).catch(() => {}); });
-});
+function avgToStars(n) {
+  if (!Number.isFinite(n)) return '0.00';
+  return n.toFixed(2);
+}
 
-async function resetPings() {
-  const shops = await Shop.find({});
-  const now = new Date();
-  for (const s of shops) {
-    const cfg = await getConfig(s.guildId);
-    const days = opt(cfg, 'pingDays', DEFAULTS.pingDays);
-    const diff = (now - new Date(s.pingWindowStart)) / 86400000;
-    if (diff >= days) { s.pingCount = 0; s.pingWindowStart = now; await s.save(); }
+async function resolveCategoryFromMessage(message, raw) {
+  const mention = message.mentions.channels.first();
+  if (mention) {
+    if (mention.type === ChannelType.GuildCategory) return mention;
+    if (mention.parentId) return message.guild.channels.cache.get(mention.parentId) || null;
+  }
+  const id = raw.match(/\d{17,20}/)?.[0];
+  if (!id) return null;
+  const channel = message.guild.channels.cache.get(id);
+  return channel && channel.type === ChannelType.GuildCategory ? channel : null;
+}
+
+async function ensureStatsChannels(guild) {
+  const cfg = await getCfg(guild.id);
+  const statsCatId = cfg?.statsCategoryId;
+  if (!statsCatId) return { ok: false, err: 'Fais !setcategory stats ...' };
+
+  const category = guild.channels.cache.get(statsCatId);
+  if (!category || category.type !== ChannelType.GuildCategory) return { ok: false, err: 'Categorie stats introuvable.' };
+
+  const everyone = guild.roles.everyone.id;
+  const defs = [
+    ['statsTotalMembersChannelId', '🖤・Membres: 0'],
+    ['statsOnlineMembersChannelId', '🖤・En ligne: 0'],
+    ['statsProofCountChannelId', '🖤・Proofs: 0'],
+    ['statsProofAvgChannelId', '🖤・Note Moy: 0.00⭐'],
+    ['statsStoreChannelId', '🖤・Stores: 0']
+  ];
+
+  for (const [key, name] of defs) {
+    const existingId = cfg?.[key];
+    const existing = existingId ? guild.channels.cache.get(existingId) : null;
+    if (existing) continue;
+    const ch = await guild.channels.create({
+      name,
+      type: ChannelType.GuildVoice,
+      parent: category,
+      permissionOverwrites: [
+        {
+          id: everyone,
+          allow: [PermissionsBitField.Flags.ViewChannel],
+          deny: [PermissionsBitField.Flags.Connect]
+        }
+      ]
+    });
+    await setCfg(guild.id, { [key]: ch.id });
+  }
+
+  return { ok: true };
+}
+
+async function updateStats(guild) {
+  const cfg = await getCfg(guild.id);
+  if (!cfg) return;
+
+  const members = await guild.members.fetch();
+  const totalMembers = members.size;
+  const onlineMembers = members.filter((m) => m.presence && m.presence.status !== 'offline').size;
+
+  const proofCount = await Proof.countDocuments({ guildId: guild.id });
+  const proofAgg = await Proof.aggregate([
+    { $match: { guildId: guild.id } },
+    { $group: { _id: null, avg: { $avg: '$stars' } } }
+  ]);
+  const proofAvg = proofAgg[0]?.avg || 0;
+
+  const storeCount = await Shop.countDocuments({ guildId: guild.id });
+
+  const updates = [
+    [cfg.statsTotalMembersChannelId, `🖤・Membres: ${totalMembers}`],
+    [cfg.statsOnlineMembersChannelId, `🖤・En ligne: ${onlineMembers}`],
+    [cfg.statsProofCountChannelId, `🖤・Proofs: ${proofCount}`],
+    [cfg.statsProofAvgChannelId, `🖤・Note Moy: ${avgToStars(proofAvg)}⭐`],
+    [cfg.statsStoreChannelId, `🖤・Stores: ${storeCount}`]
+  ];
+
+  for (const [channelId, name] of updates) {
+    if (!channelId) continue;
+    const ch = guild.channels.cache.get(channelId);
+    if (!ch) continue;
+    await ch.setName(name).catch(() => {});
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SHOP
-// ═══════════════════════════════════════════════════════════════
+async function resetPingWindows() {
+  const shops = await Shop.find({});
+  const now = Date.now();
+  for (const s of shops) {
+    const cfg = await getCfg(s.guildId);
+    const days = val(cfg, 'pingDays');
+    const elapsedDays = (now - new Date(s.pingWindowStart).getTime()) / 86400000;
+    if (elapsedDays >= days) {
+      s.pingCount = 0;
+      s.pingWindowStart = new Date();
+      await s.save();
+    }
+  }
+}
 
-async function createShop(guild, target, author) {
-  const cfg = await getConfig(guild.id);
-  const catId = cfg?.shopCategoryId;
-  if (!catId) return { ok: false, err: 'Configure d\'abord : `!setcategory shop #catégorie-shops`' };
+async function sendRentReminders() {
+  const shops = await Shop.find({});
+  const now = Date.now();
+  for (const s of shops) {
+    const cfg = await getCfg(s.guildId);
+    const rentDays = val(cfg, 'rentDays');
+    const price = val(cfg, 'shopPriceEuros');
+    const inviteLink = val(cfg, 'inviteLink');
+    const elapsedDays = (now - new Date(s.createdAt).getTime()) / 86400000;
+    if (elapsedDays < rentDays || Math.round(elapsedDays) % rentDays !== 0) continue;
 
-  const cat = guild.channels.cache.get(catId);
-  if (!cat || cat.type !== ChannelType.GuildCategory) return { ok: false, err: 'Catégorie shops introuvable.' };
+    const ch = await client.channels.fetch(s.channelId).catch(() => null);
+    if (!ch || ch.type !== ChannelType.GuildText) continue;
+    await ch
+      .send(`⚠️ Attention ! Tu dois payer **${price}€** ton hebergement ou booster le serveur \`${inviteLink}\` sinon ton shop sera supprime.`)
+      .catch(() => {});
+  }
+}
 
-  const prefix = opt(cfg, 'shopNamePrefix', DEFAULTS.shopNamePrefix);
-  const name = `${prefix}${target.user.username}`.slice(0, 100);
-  const everyone = guild.roles.everyone;
+async function createShop(message, target) {
+  const cfg = await getCfg(message.guild.id);
+  if (!cfg?.shopCategoryId) {
+    await message.reply('❌ Configure d’abord la categorie shop: `!setcategory shop ...`');
+    return;
+  }
+  const category = message.guild.channels.cache.get(cfg.shopCategoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    await message.reply('❌ Categorie shop introuvable.');
+    return;
+  }
 
-  const ch = await guild.channels.create({
-    name,
+  const prefix = val(cfg, 'shopNamePrefix');
+  const channelName = `${prefix}${target.user.username}`.slice(0, 100);
+
+  const channel = await message.guild.channels.create({
+    name: channelName,
     type: ChannelType.GuildText,
-    parent: cat,
+    parent: category,
     permissionOverwrites: [
-      { id: everyone.id, allow: ['ViewChannel'], deny: ['SendMessages'] },
-      { id: target.id, allow: ['ViewChannel', 'SendMessages'] }
+      {
+        id: message.guild.roles.everyone.id,
+        allow: [PermissionsBitField.Flags.ViewChannel],
+        deny: [PermissionsBitField.Flags.SendMessages]
+      },
+      {
+        id: target.id,
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+      }
     ]
   });
 
   const now = new Date();
   await Shop.findOneAndUpdate(
-    { channelId: ch.id },
-    { channelId: ch.id, guildId: guild.id, ownerId: target.id, createdAt: now, createdBy: author.id, pingCount: 0, pingWindowStart: now },
-    { upsert: true }
-  );
-
-  const maxP = opt(cfg, 'maxPings', DEFAULTS.maxPings);
-  const pingD = opt(cfg, 'pingDays', DEFAULTS.pingDays);
-  await ch.send({
-    content: [
-      '🛒 **NOUVEAU SHOP**',
-      `✨ **Shop de :** ${target}`,
-      `👑 **Via :** ${author}`,
-      `📅 **Début :** ${now.toLocaleString('fr-FR')}`,
-      '',
-      `📣 \`!ping\` ici — ${maxP} pings / ${pingD} jours.`
-    ].join('\n')
-  });
-
-  await updateStats(guild).catch(() => {});
-  return { ok: true, channel: ch };
-}
-
-async function linkShop(guild, channel, owner, author) {
-  const now = new Date();
-  await Shop.findOneAndUpdate(
     { channelId: channel.id },
-    { channelId: channel.id, guildId: guild.id, ownerId: owner.id, createdAt: now, createdBy: author.id, pingCount: 0, pingWindowStart: now },
+    {
+      guildId: message.guild.id,
+      ownerId: target.id,
+      createdBy: message.author.id,
+      createdAt: now,
+      pingCount: 0,
+      pingWindowStart: now
+    },
     { upsert: true }
   );
-  await updateStats(guild).catch(() => {});
+
+  await channel.send(
+    [
+      '🛒 **NOUVEAU SHOP OUVERT**',
+      `✨ Shop de: ${target}`,
+      `👑 Shop via: ${message.author}`,
+      `📅 Debut: ${now.toLocaleString('fr-FR')}`,
+      `📣 Utilise \`!ping\` ici (${val(cfg, 'maxPings')} fois / ${val(cfg, 'pingDays')} jours).`
+    ].join('\n')
+  );
+
+  await updateStats(message.guild).catch(() => {});
+  await message.reply(`✅ Shop cree: ${channel}`);
 }
-
-async function checkRents() {
-  const shops = await Shop.find({});
-  const now = new Date();
-  for (const s of shops) {
-    try {
-      const cfg = await getConfig(s.guildId);
-      const rentDays = opt(cfg, 'rentDays', DEFAULTS.rentDays);
-      const price = opt(cfg, 'shopPriceEuros', DEFAULTS.shopPriceEuros);
-      const invite = opt(cfg, 'inviteLink', DEFAULTS.inviteLink);
-      const ch = await client.channels.fetch(s.channelId).catch(() => null);
-      if (!ch || ch.type !== ChannelType.GuildText) continue;
-      const diff = (now - new Date(s.createdAt)) / 86400000;
-      if (diff >= rentDays && Math.round(diff) % rentDays === 0) {
-        await ch.send({ content: `⚠️ **RAPPEL** — ${price}€ ou boost \`${invite}\` sinon suppression.` });
-      }
-    } catch (_) {}
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// STATS
-// ═══════════════════════════════════════════════════════════════
-
-async function ensureStatsChannels(guild) {
-  const cfg = await getConfig(guild.id);
-  const catId = cfg?.statsCategoryId;
-  if (!catId) return { ok: false, err: 'Configure : `!setcategory stats #catégorie-stats`' };
-
-  const cat = guild.channels.cache.get(catId);
-  if (!cat || cat.type !== ChannelType.GuildCategory) return { ok: false, err: 'Catégorie stats introuvable.' };
-
-  const everyone = guild.roles.everyone;
-  const keys = ['statsTotalMembersChannelId', 'statsOnlineMembersChannelId', 'statsProofChannelId', 'statsStoreChannelId'];
-  const names = ['🖤・Total: 0', '🖤・En ligne: 0', '🖤・Proofs: 0', '🖤・Stores: 0'];
-
-  for (let i = 0; i < keys.length; i++) {
-    let ch = cfg?.[keys[i]] ? guild.channels.cache.get(cfg[keys[i]]) : null;
-    if (!ch) {
-      ch = await guild.channels.create({
-        name: names[i],
-        type: ChannelType.GuildVoice,
-        parent: cat,
-        permissionOverwrites: [{ id: everyone.id, allow: ['ViewChannel'], deny: ['Connect'] }]
-      });
-      await setConfig(guild.id, { [keys[i]]: ch.id });
-    }
-  }
-  return { ok: true };
-}
-
-async function updateStats(guild) {
-  const cfg = await getConfig(guild.id);
-  if (!cfg) return;
-  const gid = guild.id;
-
-  const ids = [cfg.statsTotalMembersChannelId, cfg.statsOnlineMembersChannelId, cfg.statsProofChannelId, cfg.statsStoreChannelId];
-  const chs = ids.map(id => id ? guild.channels.cache.get(id) : null).filter(Boolean);
-  if (!chs.length) return;
-
-  const members = await guild.members.fetch();
-  const total = members.size;
-  const online = members.filter(m => m.presence?.status && m.presence.status !== 'offline').size;
-  const proofs = await Avis.countDocuments({ guildId: gid });
-  const stores = await Shop.countDocuments({ guildId: gid });
-
-  const updates = [
-    [`🖤・Total: ${total}`, cfg.statsTotalMembersChannelId],
-    [`🖤・En ligne: ${online}`, cfg.statsOnlineMembersChannelId],
-    [`🖤・Proofs: ${proofs}`, cfg.statsProofChannelId],
-    [`🖤・Stores: ${stores}`, cfg.statsStoreChannelId]
-  ];
-  for (const [name, id] of updates) {
-    const c = id ? guild.channels.cache.get(id) : null;
-    if (c) await c.setName(name).catch(() => {});
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ANTI-LIENS
-// ═══════════════════════════════════════════════════════════════
 
 const LINK_REGEX = /(https?:\/\/|discord\.gg\/|www\.)/i;
 
-async function onLink(message) {
+async function moderateLinks(message) {
   if (!message.guild || message.author.bot || !LINK_REGEX.test(message.content)) return;
-  const m = message.member;
-  if (!m) return;
+  if (isAdmin(message.member)) return;
 
-  if (m.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-  const cfg = await getConfig(message.guild.id);
-  const roleId = cfg?.allowedLinkRoleId;
-  if (roleId && m.roles.cache.has(roleId)) return;
+  const cfg = await getCfg(message.guild.id);
+  const allowedRoleId = cfg?.allowedLinkRoleId;
+  if (allowedRoleId && message.member.roles.cache.has(allowedRoleId)) return;
 
   await message.delete().catch(() => {});
 
-  const w = await Warn.findOneAndUpdate(
-    { userId: message.author.id },
+  const warn = await Warn.findOneAndUpdate(
+    { guildId: message.guild.id, userId: message.author.id },
     { $inc: { count: 1 } },
     { new: true, upsert: true }
   );
-  const maxWarns = opt(cfg, 'maxWarns', DEFAULTS.maxWarns);
-  const muteDays = opt(cfg, 'muteDays', DEFAULTS.muteDays);
-  const rest = Math.max(maxWarns - w.count, 0);
-  await message.channel.send({
-    content: `⚠️ ${message.author}\n\n🚫 Pas de pub gratuite ! Contacte un owner.\n❗ **${rest}** avertissement(s) restant(s).`
-  });
 
-  if (w.count >= maxWarns) {
-    await m.timeout(muteDays * 86400000, 'Abus pubs');
-    w.count = 0;
-    await w.save();
-    await message.channel.send(`🔇 ${m} mute **${muteDays} jours**.`);
+  const maxWarns = val(cfg, 'maxWarns');
+  const muteDays = val(cfg, 'muteDays');
+  const rest = Math.max(0, maxWarns - warn.count);
+
+  await message.channel.send(
+    `⚠️ ${message.author}\n🚫 Tu ne peux pas te pub gratuitement, contact un owner pour en discuter !\n❗ Il te reste **${rest}** avertissement(s).`
+  );
+
+  if (warn.count >= maxWarns) {
+    await message.member.timeout(muteDays * 86400000, 'Abus de liens/publicite').catch(() => {});
+    warn.count = 0;
+    await warn.save();
+    await message.channel.send(`🔇 ${message.member} mute ${muteDays} jours.`);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// COMMANDES
-// ═══════════════════════════════════════════════════════════════
+async function runProofQuestionnaire(message) {
+  const cfg = await getCfg(message.guild.id);
+  const proofChannelId = cfg?.proofChannelId;
+  if (!proofChannelId) {
+    await message.reply('❌ Un admin doit configurer le salon proof: `!setprf #salon`.');
+    return;
+  }
+
+  const proofChannel = await message.guild.channels.fetch(proofChannelId).catch(() => null);
+  if (!proofChannel || proofChannel.type !== ChannelType.GuildText) {
+    await message.reply('❌ Salon proof invalide. Refais `!setprf #salon`.');
+    return;
+  }
+
+  // Limitation Discord: message "visible seulement pour lui" impossible en commande préfixe.
+  // On lance donc le questionnaire en DM (visible uniquement par lui).
+  const dm = await message.author.createDM().catch(() => null);
+  if (!dm) {
+    await message.reply('❌ Impossible de t’envoyer un DM. Active tes messages privés puis recommence.');
+    return;
+  }
+
+  await message.reply('📩 Je t’ai envoye un questionnaire en DM pour ton avis/proof.');
+
+  const filter = (m) => m.author.id === message.author.id;
+
+  await dm.send('🧾 **Questionnaire Proof**\nRéponds étape par étape.\n\n1) ID de commande ? (obligatoire)');
+  const q1 = await dm.awaitMessages({ filter, max: 1, time: 120000 }).catch(() => null);
+  const orderId = q1?.first()?.content?.trim();
+  if (!orderId) return dm.send('⏳ Temps depasse. Recommence avec `+pr`.');
+
+  await dm.send('2) Quel produit as-tu acheté ?');
+  const q2 = await dm.awaitMessages({ filter, max: 1, time: 120000 }).catch(() => null);
+  const product = q2?.first()?.content?.trim();
+  if (!product) return dm.send('⏳ Temps depasse. Recommence avec `+pr`.');
+
+  await dm.send('3) Note sur 5 etoiles ? (1,2,3,4 ou 5)');
+  const q3 = await dm.awaitMessages({ filter, max: 1, time: 120000 }).catch(() => null);
+  const stars = parseInt((q3?.first()?.content || '').replace(/\D/g, ''), 10);
+  if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+    return dm.send('❌ Note invalide. Recommence avec `+pr` et mets un nombre de 1 à 5.');
+  }
+
+  await dm.send('4) Ton commentaire ?');
+  const q4 = await dm.awaitMessages({ filter, max: 1, time: 180000 }).catch(() => null);
+  const comment = q4?.first()?.content?.trim();
+  if (!comment) return dm.send('⏳ Temps depasse. Recommence avec `+pr`.');
+
+  await Proof.create({
+    guildId: message.guild.id,
+    buyerId: message.author.id,
+    orderId,
+    product,
+    comment,
+    stars
+  });
+
+  const agg = await Proof.aggregate([
+    { $match: { guildId: message.guild.id } },
+    { $group: { _id: null, avg: { $avg: '$stars' }, total: { $sum: 1 } } }
+  ]);
+  const avg = agg[0]?.avg || 0;
+  const total = agg[0]?.total || 0;
+
+  const post = await proofChannel.send(
+    [
+      '🧾 **NOUVEL AVIS / PROOF**',
+      `👤 Acheteur: ${message.author}`,
+      `🆔 ID commande: \`${orderId}\``,
+      `📦 Produit: ${product}`,
+      `⭐ Note: ${'⭐'.repeat(stars)} (${stars}/5)`,
+      `💬 Commentaire: ${comment}`,
+      '',
+      `📊 Moyenne globale: **${avgToStars(avg)}/5** (${total} avis)`
+    ].join('\n')
+  );
+
+  await message.channel.send(`${message.author} ✅ Ton avis a été publié dans ${proofChannel}.`);
+  await updateStats(message.guild).catch(() => {});
+  return post;
+}
+
+client.once('ready', () => {
+  console.log(`Connecte: ${client.user.tag}`);
+  cron.schedule('0 */12 * * *', () => resetPingWindows().catch(() => {}));
+  cron.schedule('0 10 * * *', () => sendRentReminders().catch(() => {}));
+  cron.schedule('*/5 * * * *', async () => {
+    for (const guild of client.guilds.cache.values()) {
+      await updateStats(guild).catch(() => {});
+    }
+  });
+});
+
+client.on('guildMemberAdd', async (member) => {
+  const cfg = await getCfg(member.guild.id);
+  if (!cfg?.joinRoleId) return;
+  const role = member.guild.roles.cache.get(cfg.joinRoleId);
+  if (role) await member.roles.add(role).catch(() => {});
+});
 
 client.on('messageCreate', async (message) => {
   try {
-    if (!message.guild || !message.content?.trim()) return;
-    const content = message.content.trim();
-    const admin = message.member?.permissions.has(PermissionsBitField.Flags.Administrator);
+    if (!message.guild || !message.content) return;
+    if (message.author.bot) return;
 
-    await onLink(message);
+    await moderateLinks(message);
 
-    // ─── !setcategory shop
-    if (content.startsWith('!setcategory shop ')) {
+    const text = message.content.trim();
+    const admin = isAdmin(message.member);
+
+    if (text.startsWith('!setcategory shop ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const guild = message.guild;
-      const ch = message.mentions.channels.first();
-      let cat = null;
-      if (ch) {
-        cat = ch.type === ChannelType.GuildCategory ? ch : guild.channels.cache.get(ch.parentId);
-      } else {
-        const id = content.match(/\d{17,20}/)?.[0];
-        if (id) cat = guild.channels.cache.get(id);
-      }
-      if (!cat || cat.type !== ChannelType.GuildCategory) return message.reply('❌ `!setcategory shop #catégorie` (mentionne un salon dans la catégorie) ou `!setcategory shop ID`');
-      await setConfig(guild.id, { shopCategoryId: cat.id });
-      return message.reply(`✅ Catégorie shops : **${cat.name}**`);
+      const category = await resolveCategoryFromMessage(message, text);
+      if (!category) return message.reply('❌ Utilise `!setcategory shop #salon-dans-la-categorie` ou ID.');
+      await setCfg(message.guild.id, { shopCategoryId: category.id });
+      return message.reply(`✅ Categorie shop definie: **${category.name}**`);
     }
 
-    // ─── !setcategory stats
-    if (content.startsWith('!setcategory stats ')) {
+    if (text.startsWith('!setcategory stats ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const guild = message.guild;
-      const ch = message.mentions.channels.first();
-      let cat = null;
-      if (ch) {
-        cat = ch.type === ChannelType.GuildCategory ? ch : guild.channels.cache.get(ch.parentId);
-      } else {
-        const id = content.match(/\d{17,20}/)?.[0];
-        if (id) cat = guild.channels.cache.get(id);
-      }
-      if (!cat || cat.type !== ChannelType.GuildCategory) return message.reply('❌ `!setcategory stats #catégorie` ou `!setcategory stats ID`');
-      await setConfig(guild.id, { statsCategoryId: cat.id });
-      return message.reply(`✅ Catégorie stats : **${cat.name}**`);
+      const category = await resolveCategoryFromMessage(message, text);
+      if (!category) return message.reply('❌ Utilise `!setcategory stats #salon-dans-la-categorie` ou ID.');
+      await setCfg(message.guild.id, { statsCategoryId: category.id });
+      return message.reply(`✅ Categorie stats definie: **${category.name}**`);
     }
 
-    // ─── !setprf
-    if (content === '!setprf' || content.startsWith('!setprf ')) {
+    if (text === '!setprf' || text.startsWith('!setprf ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const ch = message.mentions.channels.first();
-      const targetChannel = ch ? await message.guild.channels.fetch(ch.id).catch(() => null) : message.channel;
-      if (!targetChannel || targetChannel.type !== ChannelType.GuildText) return message.reply('❌ `!setprf` (dans le salon) ou `!setprf #salon`');
-      await setConfig(message.guild.id, { prfChannelId: targetChannel.id });
-      return message.reply(`✅ Salon proof : ${targetChannel}. Les avis \`!prf\` créeront des fils ici.`);
+      const mentioned = message.mentions.channels.first();
+      const ch = mentioned ? message.guild.channels.cache.get(mentioned.id) : message.channel;
+      if (!ch || ch.type !== ChannelType.GuildText) return message.reply('❌ Utilise `!setprf #salon` ou fais `!setprf` dans le salon.');
+      await setCfg(message.guild.id, { proofChannelId: ch.id });
+      return message.reply(`✅ Salon proof defini: ${ch}`);
     }
 
-    // ─── !setpingrole
-    if (content.startsWith('!setpingrole ')) {
+    if (text.startsWith('!setpingrole ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
       const role = message.mentions.roles.first();
-      if (!role) return message.reply('❌ `!setpingrole @role`');
-      await setConfig(message.guild.id, { pingRoleId: role.id });
-      return message.reply(`✅ Rôle ping : ${role}`);
+      if (!role) return message.reply('❌ Utilise `!setpingrole @role`');
+      await setCfg(message.guild.id, { pingRoleId: role.id });
+      return message.reply(`✅ Role ping: ${role}`);
     }
 
-    // ─── !setlinkrole
-    if (content.startsWith('!setlinkrole ')) {
+    if (text.startsWith('!setlinkrole ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
       const role = message.mentions.roles.first();
-      if (!role) return message.reply('❌ `!setlinkrole @role`');
-      await setConfig(message.guild.id, { allowedLinkRoleId: role.id });
-      return message.reply(`✅ Rôle autorisé à envoyer des liens : ${role}`);
+      if (!role) return message.reply('❌ Utilise `!setlinkrole @role`');
+      await setCfg(message.guild.id, { allowedLinkRoleId: role.id });
+      return message.reply(`✅ Role autorise liens: ${role}`);
     }
 
-    // ─── !setjoinrole
-    if (content.startsWith('!setjoinrole ')) {
+    if (text.startsWith('!setjoinrole ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
       const role = message.mentions.roles.first();
-      if (!role) return message.reply('❌ `!setjoinrole @role`');
-      await setConfig(message.guild.id, { joinRoleId: role.id });
-      return message.reply(`✅ Rôle à l'arrivée : ${role}`);
+      if (!role) return message.reply('❌ Utilise `!setjoinrole @role`');
+      await setCfg(message.guild.id, { joinRoleId: role.id });
+      return message.reply(`✅ Role auto-arrivee: ${role}`);
     }
 
-    // ─── !setshopprefix
-    if (content.startsWith('!setshopprefix ')) {
+    if (text.startsWith('!setshopprefix ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const prefix = content.slice(14).trim().slice(0, 20) || DEFAULTS.shopNamePrefix;
-      await setConfig(message.guild.id, { shopNamePrefix: prefix });
-      return message.reply(`✅ Préfixe shops : \`${prefix}\``);
+      const prefix = text.replace('!setshopprefix', '').trim().slice(0, 20);
+      if (!prefix) return message.reply('❌ Utilise `!setshopprefix 💸・`');
+      await setCfg(message.guild.id, { shopNamePrefix: prefix });
+      return message.reply(`✅ Prefixe shop: \`${prefix}\``);
     }
 
-    // ─── !setloyer
-    if (content.startsWith('!setloyer ')) {
+    if (text.startsWith('!setloyer ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 0) return message.reply('❌ `!setloyer 3` (prix en euros)');
-      await setConfig(message.guild.id, { shopPriceEuros: n });
-      return message.reply(`✅ Loyer shop : **${n}€**`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 0) return message.reply('❌ Utilise `!setloyer 3`');
+      await setCfg(message.guild.id, { shopPriceEuros: n });
+      return message.reply(`✅ Loyer: ${n}€`);
     }
 
-    // ─── !setinvite
-    if (content.startsWith('!setinvite ')) {
+    if (text.startsWith('!setinvite ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const link = content.slice(11).trim().slice(0, 200);
-      if (!link) return message.reply('❌ `!setinvite https://discord.gg/xxx`');
-      await setConfig(message.guild.id, { inviteLink: link });
-      return message.reply(`✅ Lien serveur : ${link}`);
+      const link = text.replace('!setinvite', '').trim().slice(0, 200);
+      if (!link) return message.reply('❌ Utilise `!setinvite https://discord.gg/xxx`');
+      await setCfg(message.guild.id, { inviteLink: link });
+      return message.reply(`✅ Lien invite: ${link}`);
     }
 
-    // ─── !setpings
-    if (content.startsWith('!setpings ')) {
+    if (text.startsWith('!setpings ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 1 || n > 50) return message.reply('❌ `!setpings 3` (nb de pings autorisés)');
-      await setConfig(message.guild.id, { maxPings: n });
-      return message.reply(`✅ Pings max : **${n}** par période`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 1 || n > 100) return message.reply('❌ Utilise `!setpings 3`');
+      await setCfg(message.guild.id, { maxPings: n });
+      return message.reply(`✅ Max pings: ${n}`);
     }
 
-    // ─── !setpingdays
-    if (content.startsWith('!setpingdays ')) {
+    if (text.startsWith('!setpingdays ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 1 || n > 365) return message.reply('❌ `!setpingdays 5` (période en jours)');
-      await setConfig(message.guild.id, { pingDays: n });
-      return message.reply(`✅ Période pings : **${n} jours**`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 1 || n > 365) return message.reply('❌ Utilise `!setpingdays 5`');
+      await setCfg(message.guild.id, { pingDays: n });
+      return message.reply(`✅ Fenetre pings: ${n} jours`);
     }
 
-    // ─── !setwarns
-    if (content.startsWith('!setwarns ')) {
+    if (text.startsWith('!setwarns ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 1 || n > 20) return message.reply('❌ `!setwarns 5` (avertissements avant mute)');
-      await setConfig(message.guild.id, { maxWarns: n });
-      return message.reply(`✅ Avertissements max : **${n}** avant mute`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 1 || n > 20) return message.reply('❌ Utilise `!setwarns 5`');
+      await setCfg(message.guild.id, { maxWarns: n });
+      return message.reply(`✅ Warns max: ${n}`);
     }
 
-    // ─── !setmutedays
-    if (content.startsWith('!setmutedays ')) {
+    if (text.startsWith('!setmutedays ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 1 || n > 365) return message.reply('❌ `!setmutedays 5` (durée mute en jours)');
-      await setConfig(message.guild.id, { muteDays: n });
-      return message.reply(`✅ Durée mute : **${n} jours**`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 1 || n > 365) return message.reply('❌ Utilise `!setmutedays 5`');
+      await setCfg(message.guild.id, { muteDays: n });
+      return message.reply(`✅ Mute: ${n} jours`);
     }
 
-    // ─── !setrentdays
-    if (content.startsWith('!setrentdays ')) {
+    if (text.startsWith('!setrentdays ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const n = parseInt(content.split(/\s+/)[1], 10);
-      if (isNaN(n) || n < 1 || n > 365) return message.reply('❌ `!setrentdays 14` (rappel loyer tous les X jours)');
-      await setConfig(message.guild.id, { rentDays: n });
-      return message.reply(`✅ Rappel loyer : tous les **${n} jours**`);
+      const n = parseInt(text.split(/\s+/)[1], 10);
+      if (!Number.isInteger(n) || n < 1 || n > 365) return message.reply('❌ Utilise `!setrentdays 14`');
+      await setCfg(message.guild.id, { rentDays: n });
+      return message.reply(`✅ Rappel loyer: ${n} jours`);
     }
 
-    // ─── !config
-    if (content === '!config') {
+    if (text === '!config') {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const cfg = await getConfig(message.guild.id);
+      const cfg = await getCfg(message.guild.id);
       const lines = [
-        '📋 **Config**',
-        cfg?.shopCategoryId ? `🛒 Shops : <#${cfg.shopCategoryId}>` : '🛒 Shops : —',
-        cfg?.statsCategoryId ? `📊 Stats : <#${cfg.statsCategoryId}>` : '📊 Stats : —',
-        cfg?.prfChannelId ? `⭐ Proof/avis : <#${cfg.prfChannelId}>` : '⭐ Proof : —',
-        cfg?.pingRoleId ? `🔔 Ping : <@&${cfg.pingRoleId}>` : '🔔 Ping : —',
-        cfg?.allowedLinkRoleId ? `🔗 Liens : <@&${cfg.allowedLinkRoleId}>` : '🔗 Liens : —',
-        cfg?.joinRoleId ? `👋 Arrivée : <@&${cfg.joinRoleId}>` : '👋 Arrivée : —',
-        `📦 Préfixe : \`${opt(cfg, 'shopNamePrefix', DEFAULTS.shopNamePrefix)}\``,
-        `💰 Loyer : ${opt(cfg, 'shopPriceEuros', DEFAULTS.shopPriceEuros)}€`,
-        `📣 Pings : ${opt(cfg, 'maxPings', DEFAULTS.maxPings)} / ${opt(cfg, 'pingDays', DEFAULTS.pingDays)}j`,
-        `⚠️ Warns : ${opt(cfg, 'maxWarns', DEFAULTS.maxWarns)} → mute ${opt(cfg, 'muteDays', DEFAULTS.muteDays)}j`,
-        `📅 Rappel loyer : ${opt(cfg, 'rentDays', DEFAULTS.rentDays)}j`,
-        `🔗 Invite : ${opt(cfg, 'inviteLink', DEFAULTS.inviteLink)}`
+        '📋 Config actuelle',
+        cfg?.shopCategoryId ? `🛒 Shop category: <#${cfg.shopCategoryId}>` : '🛒 Shop category: —',
+        cfg?.statsCategoryId ? `📊 Stats category: <#${cfg.statsCategoryId}>` : '📊 Stats category: —',
+        cfg?.proofChannelId ? `⭐ Proof channel: <#${cfg.proofChannelId}>` : '⭐ Proof channel: —',
+        cfg?.pingRoleId ? `🔔 Ping role: <@&${cfg.pingRoleId}>` : '🔔 Ping role: —',
+        cfg?.allowedLinkRoleId ? `🔗 Link role: <@&${cfg.allowedLinkRoleId}>` : '🔗 Link role: —',
+        cfg?.joinRoleId ? `👋 Join role: <@&${cfg.joinRoleId}>` : '👋 Join role: —',
+        `📦 Prefixe shop: \`${val(cfg, 'shopNamePrefix')}\``,
+        `💰 Loyer: ${val(cfg, 'shopPriceEuros')}€`,
+        `📣 Pings: ${val(cfg, 'maxPings')} / ${val(cfg, 'pingDays')} jours`,
+        `⚠️ Warns: ${val(cfg, 'maxWarns')} → mute ${val(cfg, 'muteDays')} jours`,
+        `📅 Rent reminder: ${val(cfg, 'rentDays')} jours`,
+        `🔗 Invite link: ${val(cfg, 'inviteLink')}`
       ];
       return message.reply(lines.join('\n'));
     }
 
-    // ─── !create
-    if (content.startsWith('!create ')) {
+    if (text.startsWith('!create ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
       const target = message.mentions.members.first();
-      if (!target) return message.reply('❌ `!create @user`');
-      const r = await createShop(message.guild, target, message.author);
-      if (r.ok) return message.reply(`✅ Shop créé : ${r.channel}`);
-      return message.reply('⚠️ ' + (r.err || 'Erreur'));
+      if (!target) return message.reply('❌ Utilise `!create @user`');
+      return createShop(message, target);
     }
 
-    // ─── !linkshop / !registershop
-    if (content.startsWith('!linkshop ') || content.startsWith('!registershop ')) {
+    if (text.startsWith('!linkshop ') || text.startsWith('!registershop ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const target = message.mentions.members.first();
-      if (!target) return message.reply('❌ `!linkshop @vendeur #salon` ou `!registershop @vendeur` (dans le salon)');
-      const m = content.match(/<#(\d+)>/);
-      const ch = m ? await message.guild.channels.fetch(m[1]).catch(() => null) : message.channel;
-      if (!ch || ch.type !== ChannelType.GuildText) return message.reply('❌ Salon invalide.');
-      await linkShop(message.guild, ch, target, message.author);
-      return message.reply(`✅ ${ch} lié à ${target}.`);
+      const owner = message.mentions.members.first();
+      if (!owner) return message.reply('❌ Utilise `!linkshop @vendeur #salon` ou `!registershop @vendeur`');
+
+      const chMention = message.mentions.channels.first();
+      const targetChannel = chMention
+        ? await message.guild.channels.fetch(chMention.id).catch(() => null)
+        : message.channel;
+      if (!targetChannel || targetChannel.type !== ChannelType.GuildText) return message.reply('❌ Salon invalide.');
+
+      await Shop.findOneAndUpdate(
+        { channelId: targetChannel.id },
+        {
+          guildId: message.guild.id,
+          channelId: targetChannel.id,
+          ownerId: owner.id,
+          createdBy: message.author.id,
+          createdAt: new Date(),
+          pingCount: 0,
+          pingWindowStart: new Date()
+        },
+        { upsert: true }
+      );
+      await updateStats(message.guild).catch(() => {});
+      return message.reply(`✅ ${targetChannel} lie a ${owner}`);
     }
 
-    // ─── !checkshop
-    if (content.startsWith('!checkshop ')) {
-      const u = message.mentions.users.first();
-      if (!u) return message.reply('❌ `!checkshop @vendeur`');
-      const shop = await Shop.findOne({ ownerId: u.id, guildId: message.guild.id });
-      if (!shop) return message.reply(`❌ Aucun shop pour ${u}.`);
-      const ch = await client.channels.fetch(shop.channelId).catch(() => null);
-      return message.reply(ch ? `✅ Shop : ${ch}` : '⚠️ Salon supprimé. Utilise `!linkshop` pour re-lier.');
+    if (text.startsWith('!checkshop ')) {
+      const target = message.mentions.users.first();
+      if (!target) return message.reply('❌ Utilise `!checkshop @vendeur`');
+      const shop = await Shop.findOne({ guildId: message.guild.id, ownerId: target.id });
+      if (!shop) return message.reply(`❌ Aucun shop pour ${target}`);
+      const ch = await message.guild.channels.fetch(shop.channelId).catch(() => null);
+      return message.reply(ch ? `✅ Shop: ${ch}` : '⚠️ Shop en base mais salon supprimé.');
     }
 
-    // ─── !stats
-    if (content === '!stats') {
+    if (text === '!stats') {
       if (!admin) return message.reply('❌ Admin uniquement.');
-      const r = await ensureStatsChannels(message.guild);
-      if (!r.ok) return message.reply('⚠️ ' + (r.err || 'Erreur'));
+      const ensured = await ensureStatsChannels(message.guild);
+      if (!ensured.ok) return message.reply(`❌ ${ensured.err}`);
       await updateStats(message.guild);
-      return message.reply('✅ Salons stats créés/mis à jour.');
+      return message.reply('✅ Salons stats crees/mis a jour.');
     }
 
-    // ─── !ping
-    if (content === '!ping') {
-      const shop = await Shop.findOne({ channelId: message.channel.id });
-      if (!shop) return message.reply('❌ Utilise dans un salon de shop.');
-      const cfg = await getConfig(message.guild.id);
-      const canPing = admin || (cfg?.pingRoleId && message.member?.roles.cache.has(cfg.pingRoleId));
-      if (!canPing) return message.reply('❌ Tu n\'as pas le rôle ping. Configure : `!setpingrole @role`');
-      if (shop.ownerId !== message.member?.id && !admin) return message.reply('❌ Seul le proprio peut ping.');
+    if (text === '!ping') {
+      const shop = await Shop.findOne({ guildId: message.guild.id, channelId: message.channel.id });
+      if (!shop) return message.reply('❌ Commande uniquement dans un salon shop.');
+      const cfg = await getCfg(message.guild.id);
+      const canPing = isAdmin(message.member) || (cfg?.pingRoleId && message.member.roles.cache.has(cfg.pingRoleId));
+      if (!canPing) return message.reply('❌ Tu n’as pas la permission ping.');
+      if (!isAdmin(message.member) && shop.ownerId !== message.member.id) return message.reply('❌ Seul le proprio peut ping.');
 
-      const maxPings = opt(cfg, 'maxPings', DEFAULTS.maxPings);
-      const pingDays = opt(cfg, 'pingDays', DEFAULTS.pingDays);
-      const now = new Date();
-      const start = new Date(shop.pingWindowStart);
-      if ((now - start) / 86400000 >= pingDays) {
+      const now = Date.now();
+      const pingDays = val(cfg, 'pingDays');
+      const maxPings = val(cfg, 'maxPings');
+      const elapsedDays = (now - new Date(shop.pingWindowStart).getTime()) / 86400000;
+      if (elapsedDays >= pingDays) {
         shop.pingCount = 0;
-        shop.pingWindowStart = now;
+        shop.pingWindowStart = new Date();
       }
       if (shop.pingCount >= maxPings) {
         await shop.save();
-        return message.reply(`⏳ Plus de pings. Attends le reset.`);
+        return message.reply('⏳ Limite de pings atteinte.');
       }
-      shop.pingCount++;
+
+      shop.pingCount += 1;
       await shop.save();
-      const rest = maxPings - shop.pingCount;
-      return message.channel.send({
-        content: `📢 **ANNONCE SHOP**\n@everyone\n\n🛍️ ${message.member} — annonce.\n🔔 **${rest}** ping(s) restant(s).`
-      });
+      const left = maxPings - shop.pingCount;
+
+      await message.channel.send(
+        ['📢 **ANNONCE SHOP**', '@everyone', '', `🛍️ ${message.member} vient de faire une annonce.`, `🔔 Il lui reste **${left}** ping(s).`].join('\n')
+      );
+      return;
     }
 
-    // ─── !prf — questionnaire avis puis crée un fil dans le salon configuré avec !setprf
-    if (content === '!prf') {
-      const cfg = await getConfig(message.guild.id);
-      const prfChannelId = cfg?.prfChannelId;
-      if (!prfChannelId) return message.reply('❌ Un admin doit configurer : `!setprf` dans le salon où poster les avis.');
-
-      const prfChannel = await message.guild.channels.fetch(prfChannelId).catch(() => null);
-      if (!prfChannel || prfChannel.type !== ChannelType.GuildText) return message.reply('❌ Salon proof introuvable. Admin : `!setprf #salon`.');
-
-      const filter = m => m.author.id === message.author.id;
-
-      await message.reply('🛍️ **Quel produit as-tu acheté ?**');
-      const r1 = await message.channel.awaitMessages({ filter, max: 1, time: 90_000 }).catch(() => null);
-      const produit = r1?.first()?.content?.trim() || '—';
-      if (!r1?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
-
-      await message.reply('👤 **Chez quel vendeur ?** (mention ou nom)');
-      const r2 = await message.channel.awaitMessages({ filter, max: 1, time: 90_000 }).catch(() => null);
-      const vendeur = r2?.first()?.content?.trim() || '—';
-      if (!r2?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
-
-      await message.reply('⭐ **Note sur 10 ?** (ex: `9`)');
-      const r3 = await message.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
-      const noteRaw = r3?.first()?.content?.trim() || '0';
-      const note = Math.min(10, Math.max(0, parseInt(noteRaw.replace(/\D/g, ''), 10) || 0));
-      if (!r3?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
-
-      await message.reply('💬 **Ton commentaire / avis ?**');
-      const r4 = await message.channel.awaitMessages({ filter, max: 1, time: 120_000 }).catch(() => null);
-      const commentaire = r4?.first()?.content?.trim() || '—';
-      if (!r4?.first()) return message.reply('⏳ Temps dépassé. Recommence `!prf`.');
-
-      const contentMsg = [
-        '🧾 **NOUVEL AVIS CLIENT**',
-        '',
-        `👤 **Acheteur :** ${message.author}`,
-        `🛍️ **Produit :** ${produit}`,
-        `🏪 **Vendeur :** ${vendeur}`,
-        `⭐ **Note :** ${note}/10`,
-        '',
-        `💬 **Commentaire :** ${commentaire}`,
-        '',
-        '📎 **Poste ta preuve d\'achat dans le fil ci-dessous.**'
-      ].join('\n');
-
-      const msg = await prfChannel.send({ content: contentMsg });
-      const threadName = `Avis ${message.author.username} (${note}/10)`.slice(0, 100);
-      const thread = await msg.startThread({ name: threadName, autoArchiveDuration: 10080 });
-      await thread.send('📎 Poste ici ta **preuve** (screen, reçu, etc.).');
-
-      await Avis.create({
-        guildId: message.guild.id,
-        shopChannelId: prfChannel.id,
-        sellerId: null,
-        buyerId: message.author.id,
-        note
-      });
-      await updateStats(message.guild).catch(() => {});
-
-      return message.reply(`✅ Avis posté dans ${prfChannel} ! Fil créé pour ta preuve.`);
+    if (text === '+pr') {
+      return runProofQuestionnaire(message);
     }
 
-    // ─── !legit
-    if (content === '!legit') {
-      const m = await message.channel.send('❓ **Est-ce qu\'on est legit ?**');
-      await m.react('✅');
-      await m.react('❌');
+    if (text === '!legit') {
+      const msg = await message.channel.send('❓ Est-ce qu’on est legit ?');
+      await msg.react('✅');
+      await msg.react('❌');
+      return;
     }
 
-    // ─── !help
-    if (content === '!help') {
+    if (text === '!help') {
       const help = [
-        '**🛒 Shops**',
-        '`!create @user` | `!linkshop @vendeur #salon` | `!registershop @vendeur` | `!checkshop @vendeur`',
-        '',
-        '**⚙️ Config (admin) — tout se set sur le bot**',
-        '`!setcategory shop #cat` | `!setcategory stats #cat` | `!setprf` | `!setprf #salon`',
+        '**🛠️ SETUP (admin)**',
+        '`!setcategory shop ...` | `!setcategory stats ...` | `!setprf #salon`',
         '`!setpingrole @role` | `!setlinkrole @role` | `!setjoinrole @role`',
-        '`!setshopprefix 💸・` | `!setloyer 3` | `!setinvite https://discord.gg/xxx`',
-        '`!setpings 3` | `!setpingdays 5` | `!setwarns 5` | `!setmutedays 5` | `!setrentdays 14`',
-        '`!config` — Voir toute la config',
+        '`!setshopprefix ...` | `!setloyer ...` | `!setinvite ...`',
+        '`!setpings ...` | `!setpingdays ...` | `!setwarns ...` | `!setmutedays ...` | `!setrentdays ...`',
+        '`!config`',
         '',
-        '**📢 Autres**',
-        '`!ping` | `!prf` | `!stats` | `!legit`'
+        '**🛒 SHOPS**',
+        '`!create @user` | `!linkshop @user #salon` | `!registershop @user` | `!checkshop @user`',
+        '',
+        '**📣 UTILISATION**',
+        '`!ping` | `+pr` | `!stats` | `!legit`'
       ];
-      return message.reply(help.join('\n'));
+      await message.reply(help.join('\n'));
     }
   } catch (err) {
-    console.error(err);
+    console.error('Erreur messageCreate', err);
   }
 });
 
-client.on('guildMemberAdd', async (member) => {
-  try {
-    const cfg = await getConfig(member.guild.id);
-    if (!cfg?.joinRoleId) return;
-    const role = member.guild.roles.cache.get(cfg.joinRoleId);
-    if (role) await member.roles.add(role, 'Auto-rôle');
-  } catch (_) {}
-});
-
-// ═══════════════════════════════════════════════════════════════
-// START
-// ═══════════════════════════════════════════════════════════════
-
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
-  console.error('❌ DISCORD_TOKEN manquant.');
+  console.error('DISCORD_TOKEN manquant.');
   process.exit(1);
 }
+
 client.login(token);
