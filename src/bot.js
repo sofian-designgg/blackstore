@@ -684,7 +684,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (text === '!help') {
+    if (text === '+helpstore') {
       const help = [
         '**🛠️ SETUP (admin)**',
         '`!setcategory shop ...` | `!setcategory stats ...` | `!setprf #salon`',
