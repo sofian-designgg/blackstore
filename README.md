@@ -26,7 +26,10 @@ Un **admin** configure tout via les commandes :
 |----------|-------------|
 | `!setcategory shop #cat` | Catégorie des shops |
 | `!setcategory stats #cat` | Catégorie des stats |
+| `!setcategory ticket #cat` | Catégorie des tickets proof |
 | `!setprf` ou `!setprf #salon` | Salon où les avis créent des fils |
+| `!setticketstaffrole @role` | Rôle staff tickets (validation) |
+| `!setticketmessage ...` | Texte embed ticket (vars: `{ORDER_ID}`, `{BUYER}`) |
 | `!setpingrole @role` | Rôle pour !ping |
 | `!setlinkrole @role` | Rôle autorisé liens |
 | `!setjoinrole @role` | Rôle à l'arrivée |
@@ -51,6 +54,7 @@ Un **admin** configure tout via les commandes :
 ### Usage
 - `!ping` — Annonce dans ton shop (3/5 jours)
 - `!prf` — Laisser un avis (questionnaire → fil dans le salon configuré)
+- `!ticket` — Créer un ticket proof (ID commande + bouton -> envoi dans `!setprf`)
 - `!stats` — Créer les salons de stats
 - `!legit` — Poll "Est-ce qu'on est legit ?"
 - `!help` — Liste des commandes

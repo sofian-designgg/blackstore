@@ -9,7 +9,14 @@ const {
   GatewayIntentBits,
   Partials,
   PermissionsBitField,
-  ChannelType
+  ChannelType,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
@@ -57,6 +64,9 @@ const GuildConfig = mongoose.model(
     shopCategoryId: String,
     statsCategoryId: String,
     proofChannelId: String,
+    ticketCategoryId: String,
+    ticketStaffRoleId: String,
+    ticketMessage: String,
     pingRoleId: String,
     allowedLinkRoleId: String,
     joinRoleId: String,
@@ -113,6 +123,23 @@ const Proof = mongoose.model(
   })
 );
 
+const Ticket = mongoose.model(
+  'Ticket',
+  new mongoose.Schema({
+    guildId: { type: String, index: true, required: true },
+    channelId: { type: String, index: true, required: true },
+    buyerId: { type: String, index: true, required: true },
+    orderId: { type: String, index: true, required: true },
+    status: { type: String, enum: ['open', 'sent'], default: 'open' },
+    product: { type: String, default: null },
+    comment: { type: String, default: null },
+    stars: { type: Number, default: null },
+    panelMessageId: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now },
+    sentAt: { type: Date, default: null }
+  })
+);
+
 async function getCfg(guildId) {
   return GuildConfig.findOne({ guildId }).lean();
 }
@@ -132,6 +159,174 @@ function isAdmin(member) {
 function avgToStars(n) {
   if (!Number.isFinite(n)) return '0.00';
   return n.toFixed(2);
+}
+
+function generateOrderId() {
+  // Format compact lisible: CMD-YYYYMMDD-XYZ
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
+  return `CMD-${date}-${rand}`;
+}
+
+function fillTicketTemplate(template, vars) {
+  if (!template) return '';
+  let out = template;
+  for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{${k}}`, v ?? '');
+  return out;
+}
+
+function buildTicketPanelEmbed(ticket, cfg) {
+  const buyerMention = `<@${ticket.buyerId}>`;
+  const product = ticket.product || '—';
+  const comment = ticket.comment || '—';
+  const stars = ticket.stars ? `⭐ ${'⭐'.repeat(ticket.stars)} (${ticket.stars}/5)` : '—';
+
+  const desc = fillTicketTemplate(cfg?.ticketMessage, {
+    ORDER_ID: ticket.orderId,
+    BUYER: buyerMention
+  });
+
+  return new EmbedBuilder()
+    .setTitle('🧾 Ticket Proof')
+    .setDescription(desc || `🆔 ID commande: \`${ticket.orderId}\`\n\nClique sur **"📝 Remplir mes infos"**.`)
+    .addFields(
+      { name: '🆔 ID commande', value: `\`${ticket.orderId}\``, inline: true },
+      { name: '📦 Produit', value: product, inline: false },
+      { name: '⭐ Note', value: stars, inline: false },
+      { name: '💬 Commentaire', value: comment, inline: false },
+      { name: '👤 Acheteur', value: buyerMention, inline: true }
+    )
+    .setColor(0x2a0b0b);
+}
+
+function buildTicketPanelComponents(ticketId) {
+  const fillBtn = new ButtonBuilder()
+    .setCustomId(`ticketFill:${ticketId}`)
+    .setLabel('📝 Remplir mes infos')
+    .setStyle(ButtonStyle.Primary);
+
+  const sendBtn = new ButtonBuilder()
+    .setCustomId(`ticketSend:${ticketId}`)
+    .setLabel('✅ Envoyer en preuve')
+    .setStyle(ButtonStyle.Success);
+
+  return [
+    new ActionRowBuilder().addComponents(fillBtn),
+    new ActionRowBuilder().addComponents(sendBtn)
+  ];
+}
+
+async function createTicket(message) {
+  const cfg = await getCfg(message.guild.id);
+  if (!cfg?.ticketCategoryId) {
+    await message.reply('❌ Configure d’abord la categorie tickets: `!setcategory ticket #cat`');
+    return;
+  }
+
+  const existing = await Ticket.findOne({ guildId: message.guild.id, buyerId: message.author.id, status: 'open' });
+  if (existing) {
+    await message.reply('⏳ Tu as déjà un ticket ouvert.');
+    return;
+  }
+
+  const category = message.guild.channels.cache.get(cfg.ticketCategoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    await message.reply('❌ Categorie tickets introuvable.');
+    return;
+  }
+
+  const orderId = generateOrderId();
+  const channelName = `📩・ticket-${message.author.username}`.slice(0, 90);
+
+  const everyoneId = message.guild.roles.everyone.id;
+  const staffRoleId = cfg?.ticketStaffRoleId;
+
+  const channel = await message.guild.channels
+    .create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: category,
+      permissionOverwrites: [
+        { id: everyoneId, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: message.author.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+        ...(staffRoleId
+          ? [{ id: staffRoleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }]
+          : [])
+      ]
+    })
+    .catch(() => null);
+
+  if (!channel) {
+    await message.reply('❌ Impossible de créer le ticket.');
+    return;
+  }
+
+  const ticket = await Ticket.create({
+    guildId: message.guild.id,
+    channelId: channel.id,
+    buyerId: message.author.id,
+    orderId
+  });
+
+  const panelMsg = await channel.send({
+    embeds: [buildTicketPanelEmbed(ticket, cfg)],
+    components: buildTicketPanelComponents(ticket.id)
+  });
+
+  ticket.panelMessageId = panelMsg.id;
+  await ticket.save();
+  await message.reply(`✅ Ticket cree: ${channel}\n🆔 ID commande: \`${orderId}\``);
+}
+
+async function postProofFromTicket(interaction, ticket, cfg) {
+  const proofChannelId = cfg?.proofChannelId;
+  if (!proofChannelId) {
+    return { ok: false, err: '❌ Un admin doit configurer le salon proof: `!setprf #salon`.' };
+  }
+
+  const proofChannel = await interaction.guild.channels.fetch(proofChannelId).catch(() => null);
+  if (!proofChannel || proofChannel.type !== ChannelType.GuildText) {
+    return { ok: false, err: '❌ Salon proof invalide. Refais `!setprf #salon`.' };
+  }
+
+  if (!ticket.product || !ticket.comment || !Number.isInteger(ticket.stars)) {
+    return { ok: false, err: '❌ Infos ticket incomplètes. Le buyer doit remplir produit/note/comment.' };
+  }
+
+  await Proof.create({
+    guildId: interaction.guild.id,
+    buyerId: ticket.buyerId,
+    orderId: ticket.orderId,
+    product: ticket.product,
+    comment: ticket.comment,
+    stars: ticket.stars
+  });
+
+  const proofCountAgg = await Proof.aggregate([
+    { $match: { guildId: interaction.guild.id } },
+    { $group: { _id: null, avg: { $avg: '$stars' }, total: { $sum: 1 } } }
+  ]);
+
+  const avg = proofCountAgg[0]?.avg || 0;
+  const total = proofCountAgg[0]?.total || 0;
+
+  await proofChannel.send(
+    [
+      '🧾 **NOUVEL AVIS / PROOF**',
+      `👤 Acheteur: <@${ticket.buyerId}>`,
+      `🆔 ID commande: \`${ticket.orderId}\``,
+      `📦 Produit: ${ticket.product}`,
+      `⭐ Note: ${'⭐'.repeat(ticket.stars)} (${ticket.stars}/5)`,
+      `💬 Commentaire: ${ticket.comment}`,
+      '',
+      `📊 Moyenne globale: **${avgToStars(avg)}/5** (${total} avis)`
+    ].join('\n')
+  );
+
+  await updateStats(interaction.guild).catch(() => {});
+  return { ok: true };
 }
 
 async function resolveCategoryFromMessage(message, raw) {
@@ -472,6 +667,14 @@ client.on('messageCreate', async (message) => {
       return message.reply(`✅ Categorie stats definie: **${category.name}**`);
     }
 
+    if (text.startsWith('!setcategory ticket ')) {
+      if (!admin) return message.reply('❌ Admin uniquement.');
+      const category = await resolveCategoryFromMessage(message, text);
+      if (!category) return message.reply('❌ Utilise `!setcategory ticket #cat` ou ID.');
+      await setCfg(message.guild.id, { ticketCategoryId: category.id });
+      return message.reply(`✅ Categorie ticket definie: **${category.name}**`);
+    }
+
     if (text === '!setprf' || text.startsWith('!setprf ')) {
       if (!admin) return message.reply('❌ Admin uniquement.');
       const mentioned = message.mentions.channels.first();
@@ -479,6 +682,22 @@ client.on('messageCreate', async (message) => {
       if (!ch || ch.type !== ChannelType.GuildText) return message.reply('❌ Utilise `!setprf #salon` ou fais `!setprf` dans le salon.');
       await setCfg(message.guild.id, { proofChannelId: ch.id });
       return message.reply(`✅ Salon proof defini: ${ch}`);
+    }
+
+    if (text.startsWith('!setticketstaffrole ')) {
+      if (!admin) return message.reply('❌ Admin uniquement.');
+      const role = message.mentions.roles.first();
+      if (!role) return message.reply('❌ Utilise `!setticketstaffrole @role`');
+      await setCfg(message.guild.id, { ticketStaffRoleId: role.id });
+      return message.reply(`✅ Role staff tickets: ${role}`);
+    }
+
+    if (text.startsWith('!setticketmessage ')) {
+      if (!admin) return message.reply('❌ Admin uniquement.');
+      const msg = text.replace('!setticketmessage', '').trim().slice(0, 800);
+      if (!msg) return message.reply('❌ Utilise `!setticketmessage ...`');
+      await setCfg(message.guild.id, { ticketMessage: msg });
+      return message.reply('✅ Message ticket defini.');
     }
 
     if (text.startsWith('!setpingrole ')) {
@@ -577,6 +796,11 @@ client.on('messageCreate', async (message) => {
         cfg?.shopCategoryId ? `🛒 Shop category: <#${cfg.shopCategoryId}>` : '🛒 Shop category: —',
         cfg?.statsCategoryId ? `📊 Stats category: <#${cfg.statsCategoryId}>` : '📊 Stats category: —',
         cfg?.proofChannelId ? `⭐ Proof channel: <#${cfg.proofChannelId}>` : '⭐ Proof channel: —',
+        cfg?.ticketCategoryId ? `📩 Ticket category: <#${cfg.ticketCategoryId}>` : '📩 Ticket category: —',
+        cfg?.ticketStaffRoleId ? `🧑‍💻 Ticket staff role: <@&${cfg.ticketStaffRoleId}>` : '🧑‍💻 Ticket staff role: —',
+        cfg?.ticketMessage
+          ? `📝 Ticket embed msg: ${cfg.ticketMessage.slice(0, 60).replace(/\\n/g, ' ')}...`
+          : '📝 Ticket embed msg: —',
         cfg?.pingRoleId ? `🔔 Ping role: <@&${cfg.pingRoleId}>` : '🔔 Ping role: —',
         cfg?.allowedLinkRoleId ? `🔗 Link role: <@&${cfg.allowedLinkRoleId}>` : '🔗 Link role: —',
         cfg?.joinRoleId ? `👋 Join role: <@&${cfg.joinRoleId}>` : '👋 Join role: —',
@@ -673,6 +897,10 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    if (text === '!ticket' || text === '+ticket') {
+      return createTicket(message);
+    }
+
     if (text === '+pr') {
       return runProofQuestionnaire(message);
     }
@@ -688,6 +916,8 @@ client.on('messageCreate', async (message) => {
       const help = [
         '**🛠️ SETUP (admin)**',
         '`!setcategory shop ...` | `!setcategory stats ...` | `!setprf #salon`',
+        '`!setcategory ticket #cat`',
+        '`!setticketstaffrole @role` | `!setticketmessage ...`',
         '`!setpingrole @role` | `!setlinkrole @role` | `!setjoinrole @role`',
         '`!setshopprefix ...` | `!setloyer ...` | `!setinvite ...`',
         '`!setpings ...` | `!setpingdays ...` | `!setwarns ...` | `!setmutedays ...` | `!setrentdays ...`',
@@ -697,12 +927,162 @@ client.on('messageCreate', async (message) => {
         '`!create @user` | `!linkshop @user #salon` | `!registershop @user` | `!checkshop @user`',
         '',
         '**📣 UTILISATION**',
-        '`!ping` | `+pr` | `!stats` | `!legit`'
+        '`!ping` | `!ticket` | `+pr` | `!stats` | `!legit`'
       ];
       await message.reply(help.join('\n'));
     }
   } catch (err) {
     console.error('Erreur messageCreate', err);
+  }
+});
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (!interaction.guild) return;
+
+    const customId = interaction.customId || '';
+
+    if (interaction.isButton()) {
+      if (customId.startsWith('ticketFill:')) {
+        const ticketId = customId.split(':')[1];
+        const ticket = await Ticket.findById(ticketId).lean();
+        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
+        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
+        if (ticket.buyerId !== interaction.user.id) return interaction.reply({ content: '❌ Ce n’est pas ton ticket.', ephemeral: true });
+
+        const modal = new ModalBuilder()
+          .setCustomId(`ticketModal:${ticketId}`)
+          .setTitle('🧾 Remplir mes infos');
+
+        const productRow = new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('productInput')
+            .setLabel('📦 Produit acheté')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(80)
+            .setRequired(true)
+        );
+
+        const starsRow = new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('starsInput')
+            .setLabel('⭐ Note (1 à 5)')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(2)
+            .setRequired(true)
+        );
+
+        const commentRow = new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('commentInput')
+            .setLabel('💬 Commentaire')
+            .setStyle(TextInputStyle.Paragraph)
+            .setMaxLength(500)
+            .setRequired(true)
+        );
+
+        modal.addComponents(productRow, starsRow, commentRow);
+
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (customId.startsWith('ticketSend:')) {
+        const ticketId = customId.split(':')[1];
+        const cfg = await getCfg(interaction.guild.id);
+        const ticket = await Ticket.findById(ticketId);
+        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
+        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
+
+        const authorized =
+          isAdmin(interaction.member) ||
+          (cfg?.ticketStaffRoleId && interaction.member.roles.cache.has(cfg.ticketStaffRoleId));
+
+        if (!authorized) {
+          return interaction.reply({ content: '❌ Seuls les admins / staff tickets peuvent valider.', ephemeral: true });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        // Verif champs
+        if (!ticket.product || !ticket.comment || !Number.isInteger(ticket.stars)) {
+          await interaction.editReply('❌ Le ticket n’est pas complet. Produit / Note / Commentaire requis.');
+          return;
+        }
+
+        const res = await postProofFromTicket(interaction, ticket, cfg);
+        if (!res?.ok) {
+          await interaction.editReply(res.err || '❌ Erreur lors de l\'envoi.');
+          return;
+        }
+
+        ticket.status = 'sent';
+        ticket.sentAt = new Date();
+        await ticket.save();
+
+        // Message de clôture avant verrouillage
+        await interaction.channel.send('✅ Proof envoyée dans le salon `proof`. Ticket clôturé.');
+
+        // Verrouille l’envoi de messages
+        const everyoneId = interaction.guild.roles.everyone.id;
+        await interaction.channel.permissionOverwrites.edit(everyoneId, { SendMessages: false }).catch(() => {});
+        await interaction.channel.permissionOverwrites.edit(ticket.buyerId, { SendMessages: false }).catch(() => {});
+        if (cfg?.ticketStaffRoleId) {
+          await interaction.channel.permissionOverwrites.edit(cfg.ticketStaffRoleId, { SendMessages: false }).catch(() => {});
+        }
+
+        await interaction.editReply('✅ Ticket validé. Proof envoyée.');
+        return;
+      }
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (customId.startsWith('ticketModal:')) {
+        const ticketId = customId.split(':')[1];
+        const ticket = await Ticket.findById(ticketId);
+        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
+        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
+        if (ticket.buyerId !== interaction.user.id) return interaction.reply({ content: '❌ Ce n’est pas ton ticket.', ephemeral: true });
+
+        const cfg = await getCfg(interaction.guild.id);
+        const product = interaction.fields.getTextInputValue('productInput').trim();
+        const starsRaw = interaction.fields.getTextInputValue('starsInput').trim();
+        const stars = parseInt(starsRaw.replace(/\D/g, ''), 10);
+        const comment = interaction.fields.getTextInputValue('commentInput').trim();
+
+        if (!product) return interaction.reply({ content: '❌ Produit invalide.', ephemeral: true });
+        if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+          return interaction.reply({ content: '❌ Note invalide. Mets un nombre de 1 à 5.', ephemeral: true });
+        }
+        if (!comment) return interaction.reply({ content: '❌ Commentaire invalide.', ephemeral: true });
+
+        ticket.product = product;
+        ticket.stars = stars;
+        ticket.comment = comment;
+        await ticket.save();
+
+        // Met a jour l’embed de panel si possible
+        const panelId = ticket.panelMessageId;
+        if (panelId) {
+          const msg = await interaction.channel.messages.fetch(panelId).catch(() => null);
+          if (msg) {
+            await msg.edit({
+              embeds: [buildTicketPanelEmbed(ticket, cfg)],
+              components: buildTicketPanelComponents(ticket.id)
+            }).catch(() => {});
+          }
+        }
+
+        return interaction.reply({ content: '✅ Infos enregistrées. Admin pourra valider avec le bouton.', ephemeral: true });
+      }
+    }
+  } catch (err) {
+    console.error('Erreur interactionCreate', err);
+    try {
+      if (interaction.isRepliable && interaction.isRepliable()) {
+        await interaction.reply({ content: '❌ Erreur interne.', ephemeral: true }).catch(() => {});
+      }
+    } catch (e) {}
   }
 });
 
