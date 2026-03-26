@@ -189,42 +189,49 @@ function buildTicketPanelEmbed(ticket, cfg) {
   });
 
   return new EmbedBuilder()
-    .setTitle('🧾 Ticket Proof')
-    .setDescription(desc || `🆔 ID commande: \`${ticket.orderId}\`\n\nClique sur **"📝 Remplir mes infos"**.`)
+    .setTitle('📩 Ticket (Achat / Questions)')
+    .setDescription(
+      desc ||
+        [
+          `👤 Client: ${buyerMention}`,
+          `🆔 ID commande: \`${ticket.orderId}\``,
+          '',
+          '💬 Explique ton besoin dans ce ticket.',
+          '✅ Quand la commande est terminée, un admin/staff cliquera sur **"Commande finalisée"** et tu recevras un formulaire en DM.'
+        ].join('\n')
+    )
     .addFields(
       { name: '🆔 ID commande', value: `\`${ticket.orderId}\``, inline: true },
-      { name: '📦 Produit', value: product, inline: false },
-      { name: '⭐ Note', value: stars, inline: false },
-      { name: '💬 Commentaire', value: comment, inline: false },
-      { name: '👤 Acheteur', value: buyerMention, inline: true }
+      { name: '👤 Client', value: buyerMention, inline: true },
+      { name: '📦 Produit (après formulaire)', value: product, inline: false },
+      { name: '⭐ Note (après formulaire)', value: stars, inline: false },
+      { name: '💬 Commentaire (après formulaire)', value: comment, inline: false }
     )
     .setColor(0x2a0b0b);
 }
 
 function buildTicketPanelComponents(ticketId) {
-  const fillBtn = new ButtonBuilder()
-    .setCustomId(`ticketFill:${ticketId}`)
-    .setLabel('📝 Remplir mes infos')
-    .setStyle(ButtonStyle.Primary);
-
-  const sendBtn = new ButtonBuilder()
-    .setCustomId(`ticketSend:${ticketId}`)
-    .setLabel('✅ Envoyer en preuve')
+  const finalizeBtn = new ButtonBuilder()
+    .setCustomId(`ticketFinalize:${ticketId}`)
+    .setLabel('✅ Commande finalisée')
     .setStyle(ButtonStyle.Success);
 
-  return [
-    new ActionRowBuilder().addComponents(fillBtn),
-    new ActionRowBuilder().addComponents(sendBtn)
-  ];
+  const closeBtn = new ButtonBuilder()
+    .setCustomId(`ticketClose:${ticketId}`)
+    .setLabel('🔒 Fermer ticket')
+    .setStyle(ButtonStyle.Secondary);
+
+  return [new ActionRowBuilder().addComponents(finalizeBtn, closeBtn)];
 }
 
 function buildOpenTicketPanelEmbed() {
   return new EmbedBuilder()
-    .setTitle('📩 Ticket Proof')
+    .setTitle('📩 Ouvrir un ticket')
     .setDescription(
       [
-        'Clique sur le bouton ci-dessous pour créer ton ticket de preuve.',
-        'Ensuite, un admin/staff va valider et envoyer la proof dans le salon configuré.'
+        'Clique sur le bouton ci-dessous pour créer ton ticket.',
+        'Tu pourras ensuite acheter / poser tes questions.',
+        '✅ Quand ce sera terminé, un admin/staff cliquera sur **"Commande finalisée"** et tu recevras un formulaire en DM.'
       ].join('\n')
     )
     .setColor(0x2a0b0b);
@@ -382,6 +389,53 @@ async function postProofFromTicket(interaction, ticket, cfg) {
   );
 
   await updateStats(interaction.guild).catch(() => {});
+  return { ok: true };
+}
+
+async function runFinalizeForm(interaction, ticket, cfg) {
+  const buyer = await interaction.client.users.fetch(ticket.buyerId).catch(() => null);
+  if (!buyer) return { ok: false, err: '❌ Impossible de trouver le client.' };
+
+  const dm = await buyer.createDM().catch(() => null);
+  if (!dm) {
+    return { ok: false, err: '❌ Impossible d’envoyer un DM au client (MP fermés).' };
+  }
+
+  const filter = (m) => m.author.id === buyer.id;
+
+  await dm.send(
+    [
+      '🧾 **Formulaire de proof**',
+      `🆔 ID commande: \`${ticket.orderId}\``,
+      '',
+      '1) Quel produit as-tu acheté ?'
+    ].join('\n')
+  );
+  const q1 = await dm.awaitMessages({ filter, max: 1, time: 180000 }).catch(() => null);
+  const product = q1?.first()?.content?.trim();
+  if (!product) return { ok: false, err: '⏳ Temps dépassé (produit). Le client peut refaire plus tard.' };
+
+  await dm.send('2) Note sur 5 étoiles ? (1,2,3,4 ou 5)');
+  const q2 = await dm.awaitMessages({ filter, max: 1, time: 180000 }).catch(() => null);
+  const stars = parseInt((q2?.first()?.content || '').replace(/\D/g, ''), 10);
+  if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+    return { ok: false, err: '❌ Note invalide (le client doit répondre 1 à 5).' };
+  }
+
+  await dm.send('3) Ton commentaire ?');
+  const q3 = await dm.awaitMessages({ filter, max: 1, time: 240000 }).catch(() => null);
+  const comment = q3?.first()?.content?.trim();
+  if (!comment) return { ok: false, err: '⏳ Temps dépassé (commentaire). Le client peut refaire plus tard.' };
+
+  ticket.product = product;
+  ticket.stars = stars;
+  ticket.comment = comment;
+  await ticket.save();
+
+  const res = await postProofFromTicket(interaction, ticket, cfg);
+  if (!res?.ok) return res;
+
+  await dm.send('✅ Merci ! Ton formulaire a été envoyé, la proof est publiée.');
   return { ok: true };
 }
 
@@ -1022,56 +1076,12 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply(`✅ Ticket cree: ${res.channel}\n🆔 ID commande: \`${res.orderId}\``);
       }
 
-      if (customId.startsWith('ticketFill:')) {
-        const ticketId = customId.split(':')[1];
-        const ticket = await Ticket.findById(ticketId).lean();
-        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
-        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
-        if (ticket.buyerId !== interaction.user.id) return interaction.reply({ content: '❌ Ce n’est pas ton ticket.', ephemeral: true });
-
-        const modal = new ModalBuilder()
-          .setCustomId(`ticketModal:${ticketId}`)
-          .setTitle('🧾 Remplir mes infos');
-
-        const productRow = new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('productInput')
-            .setLabel('📦 Produit acheté')
-            .setStyle(TextInputStyle.Short)
-            .setMaxLength(80)
-            .setRequired(true)
-        );
-
-        const starsRow = new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('starsInput')
-            .setLabel('⭐ Note (1 à 5)')
-            .setStyle(TextInputStyle.Short)
-            .setMaxLength(2)
-            .setRequired(true)
-        );
-
-        const commentRow = new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('commentInput')
-            .setLabel('💬 Commentaire')
-            .setStyle(TextInputStyle.Paragraph)
-            .setMaxLength(500)
-            .setRequired(true)
-        );
-
-        modal.addComponents(productRow, starsRow, commentRow);
-
-        await interaction.showModal(modal);
-        return;
-      }
-
-      if (customId.startsWith('ticketSend:')) {
+      if (customId.startsWith('ticketFinalize:')) {
         const ticketId = customId.split(':')[1];
         const cfg = await getCfg(interaction.guild.id);
         const ticket = await Ticket.findById(ticketId);
         if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
-        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
+        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket déjà clôturé.', ephemeral: true });
 
         const authorized =
           isAdmin(interaction.member) ||
@@ -1083,13 +1093,7 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        // Verif champs
-        if (!ticket.product || !ticket.comment || !Number.isInteger(ticket.stars)) {
-          await interaction.editReply('❌ Le ticket n’est pas complet. Produit / Note / Commentaire requis.');
-          return;
-        }
-
-        const res = await postProofFromTicket(interaction, ticket, cfg);
+        const res = await runFinalizeForm(interaction, ticket, cfg);
         if (!res?.ok) {
           await interaction.editReply(res.err || '❌ Erreur lors de l\'envoi.');
           return;
@@ -1099,8 +1103,7 @@ client.on('interactionCreate', async (interaction) => {
         ticket.sentAt = new Date();
         await ticket.save();
 
-        // Message de clôture avant verrouillage
-        await interaction.channel.send('✅ Proof envoyée dans le salon `proof`. Ticket clôturé.');
+        await interaction.channel.send('✅ Commande finalisée. Formulaire envoyé au client en DM. Ticket clôturé.');
 
         // Verrouille l’envoi de messages
         const everyoneId = interaction.guild.roles.everyone.id;
@@ -1110,51 +1113,40 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.channel.permissionOverwrites.edit(cfg.ticketStaffRoleId, { SendMessages: false }).catch(() => {});
         }
 
-        await interaction.editReply('✅ Ticket validé. Proof envoyée.');
+        await interaction.editReply('✅ Ticket validé. Formulaire envoyé, proof publiée.');
+        return;
+      }
+
+      if (customId.startsWith('ticketClose:')) {
+        const ticketId = customId.split(':')[1];
+        const cfg = await getCfg(interaction.guild.id);
+        const ticket = await Ticket.findById(ticketId);
+        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
+        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket déjà clôturé.', ephemeral: true });
+
+        const authorized =
+          isAdmin(interaction.member) ||
+          (cfg?.ticketStaffRoleId && interaction.member.roles.cache.has(cfg.ticketStaffRoleId));
+        if (!authorized) return interaction.reply({ content: '❌ Admin/staff uniquement.', ephemeral: true });
+
+        ticket.status = 'sent';
+        ticket.sentAt = new Date();
+        await ticket.save();
+
+        await interaction.reply({ content: '🔒 Ticket fermé.', ephemeral: true });
+        await interaction.channel.send('🔒 Ticket fermé par le staff.');
+
+        const everyoneId = interaction.guild.roles.everyone.id;
+        await interaction.channel.permissionOverwrites.edit(everyoneId, { SendMessages: false }).catch(() => {});
+        await interaction.channel.permissionOverwrites.edit(ticket.buyerId, { SendMessages: false }).catch(() => {});
+        if (cfg?.ticketStaffRoleId) {
+          await interaction.channel.permissionOverwrites.edit(cfg.ticketStaffRoleId, { SendMessages: false }).catch(() => {});
+        }
         return;
       }
     }
 
-    if (interaction.isModalSubmit()) {
-      if (customId.startsWith('ticketModal:')) {
-        const ticketId = customId.split(':')[1];
-        const ticket = await Ticket.findById(ticketId);
-        if (!ticket) return interaction.reply({ content: '❌ Ticket introuvable.', ephemeral: true });
-        if (ticket.status !== 'open') return interaction.reply({ content: '⛔ Ticket deja envoye.', ephemeral: true });
-        if (ticket.buyerId !== interaction.user.id) return interaction.reply({ content: '❌ Ce n’est pas ton ticket.', ephemeral: true });
-
-        const cfg = await getCfg(interaction.guild.id);
-        const product = interaction.fields.getTextInputValue('productInput').trim();
-        const starsRaw = interaction.fields.getTextInputValue('starsInput').trim();
-        const stars = parseInt(starsRaw.replace(/\D/g, ''), 10);
-        const comment = interaction.fields.getTextInputValue('commentInput').trim();
-
-        if (!product) return interaction.reply({ content: '❌ Produit invalide.', ephemeral: true });
-        if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
-          return interaction.reply({ content: '❌ Note invalide. Mets un nombre de 1 à 5.', ephemeral: true });
-        }
-        if (!comment) return interaction.reply({ content: '❌ Commentaire invalide.', ephemeral: true });
-
-        ticket.product = product;
-        ticket.stars = stars;
-        ticket.comment = comment;
-        await ticket.save();
-
-        // Met a jour l’embed de panel si possible
-        const panelId = ticket.panelMessageId;
-        if (panelId) {
-          const msg = await interaction.channel.messages.fetch(panelId).catch(() => null);
-          if (msg) {
-            await msg.edit({
-              embeds: [buildTicketPanelEmbed(ticket, cfg)],
-              components: buildTicketPanelComponents(ticket.id)
-            }).catch(() => {});
-          }
-        }
-
-        return interaction.reply({ content: '✅ Infos enregistrées. Admin pourra valider avec le bouton.', ephemeral: true });
-      }
-    }
+    // plus de modals pour le ticket: le formulaire part en DM après "Commande finalisée"
   } catch (err) {
     console.error('Erreur interactionCreate', err);
     try {
